@@ -25,7 +25,7 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from jaxsel._src import image_graph
-from jaxsel.examples import pathfinder_data
+from jaxsel.examples.utils import pathfinder_data
 
 
 def normalize_img(image, label):
