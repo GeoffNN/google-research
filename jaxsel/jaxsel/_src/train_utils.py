@@ -67,6 +67,8 @@ def get_first_class_representatives(
   return representatives
 
 
+EPS = 1e-8
+
 def plot_subgraph(img, q, label,
                   start_node_coords):
   """Returns a figure with an image with overlaid selected pixels.
@@ -93,7 +95,10 @@ def plot_subgraph(img, q, label,
   graph_size = img.size
   weighting = q.todense()[:graph_size]
   weighting = weighting.reshape(img.shape)
-  norm_weighting = weighting / weighting.max()
+  # TODO(gnegiar): Understand why some weights are < 0.
+  # This may be due to the directed graph property.
+  # Should we clip the weights to >0?
+  norm_weighting = abs(weighting) / (EPS + abs(weighting).max())
   ax.set_title(f'{label} (pred)')
   ax.imshow(img, cmap='gray_r', vmin=0., vmax=1.)
   ax.imshow(weighting, alpha=norm_weighting, cmap='YlOrRd', vmax=.1)
@@ -132,7 +137,7 @@ def plot_subgraph_classes(imgs, qs, labels,
     graph_size = img.size
     weighting = q.todense()[:graph_size]
     weighting = weighting.reshape(img.shape)
-    norm_weighting = weighting / weighting.max()  # normalized
+    norm_weighting = abs(weighting) / (EPS + abs(weighting).max())
     # Plot subgraph
     ax.imshow(weighting, alpha=norm_weighting, cmap='YlOrRd', vmax=.1)
     ax.contour(
