@@ -63,7 +63,7 @@ flags.DEFINE_integer('n_epochs', 5, 'Number of training epochs.')
 flags.DEFINE_float(
     'alpha', .1,
     'Probability of teleporting back to initial node distribution.')
-flags.DEFINE_float('rho', 1e-3, 'L1 regularization in sparse PageRank.')
+flags.DEFINE_float('rho', 0., 'L1 regularization in sparse PageRank.')
 flags.DEFINE_integer(
     'patch_size',
     5,
