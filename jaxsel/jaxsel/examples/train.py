@@ -71,8 +71,9 @@ flags.DEFINE_integer(
     lower_bound=1)
 flags.DEFINE_enum('optimizer', 'adam', ['adam', 'sgd'], 'optimizer to use')
 flags.DEFINE_float('learning_rate', 1e-2, 'Learning rate for the optimizer.')
+
 flags.DEFINE_string(
-    'tensorboard_logdir', None,
+    'tensorboard_logdir', os.environ.get('AIP_TENSORBOARD_LOG_DIR', None),
     'Path to directory where tensorboard summaries are stored.')
 flags.DEFINE_bool(
     'use_node_weights', True,
@@ -336,6 +337,7 @@ def training_loop(
           labels,
           rng=rng_it,
       )
+      print(loss)
       del logits
 
       batch_accuracy = jnp.mean((preds == labels).astype(float))
