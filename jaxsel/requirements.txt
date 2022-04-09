@@ -1,5 +1,6 @@
 jax>=0.3.4
-# "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_releases.html  # Note: wheels only available on linux.
+--find-links https://storage.googleapis.com/jax-releases/jax_releases.html
+jax[cuda]>=0.3.4
 numpy>=1.21
 flax>=0.4
 matplotlib>=3.5
