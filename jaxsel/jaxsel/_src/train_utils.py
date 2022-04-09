@@ -31,7 +31,6 @@ import matplotlib.patches as plot_patches
 import tensorflow as tf
 
 
-
 def get_first_datapoint_of_class(dataset,
                                  label):
   """Returns the first datapoint in dataset with given label.

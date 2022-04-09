@@ -85,7 +85,7 @@ flags.DEFINE_integer('num_steps_extractor', 25,
 flags.DEFINE_bool('debug', False,
                   'If True, we only train over 1 batch before testing.')
 flags.DEFINE_float(
-    'ridge_backward', 0.,
+    'ridge_backward', 1e-7,
     'L2 regularization for the linear system used to compute'
     'the jvp of the subgraph selection layer.')
 
@@ -267,6 +267,8 @@ def training_loop(
         method=model.compute_loss)
     return loss_vals.mean(0), (preds, logits, q)
 
+  test_forward = jax.jit(functools.partial(forward, config=eval_config))
+
   # differentiate wrt pipeline parameters
   value_grad_loss_fn = jax.value_and_grad(
       functools.partial(forward, config=train_config), has_aux=True)
@@ -414,9 +416,9 @@ def training_loop(
             [make_graph(image, patch_size, bins) for image in data_test])
 
         loss_test, (preds, logits,
-                    q) = forward(model_state, graphs_test,
-                                 graphs_test.sample_start_node_id(),
-                                 labels_test, eval_config)
+                    q) = test_forward(model_state, graphs_test,
+                                      graphs_test.sample_start_node_id(),
+                                      labels_test)
 
         test_accuracy.update_state(preds, labels_test)
 
@@ -426,8 +428,8 @@ def training_loop(
         best_test_accuracy = test_accuracy_value
       if tensorboard_logdir is not None:
         with tf_logger_test.as_default():
-          tf.summary.scalar('accuracy', test_accuracy_value, step=epoch)
-          tf.summary.scalar('loss', loss_test, step=epoch)
+          tf.summary.scalar('accuracy', test_accuracy_value, step=step)
+          tf.summary.scalar('loss', loss_test, step=step)
       # Reset metric for next epoch.
       test_accuracy.reset_state()
 

@@ -30,9 +30,10 @@ def main(*args):
             ]
         )
 
-        batch_sizes = [32, 64, 1024]
-        max_subgraph_sizes = [100 ] #, 200, 500]
-        learning_rates = [0.1, 0.001]
+        batch_sizes = [512] #, 64, 1024]
+        max_subgraph_sizes = [150 ] #, 200, 500]
+        learning_rates = [0.005]
+        alphas = [2e-4]
 
         # TODO: Add fixed hyperparams here.
         # common_args = {}
@@ -44,10 +45,11 @@ def main(*args):
                     ("batch_size", bs),
                     ("learning_rate", lr),
                     ("max_subgraph_size", max_subgraph_size),
+                    ("alpha", alpha)
                 ]
             )
-            for (bs, lr, max_subgraph_size) in itertools.product(
-                batch_sizes, learning_rates, max_subgraph_sizes
+            for (bs, lr, max_subgraph_size, alpha) in itertools.product(
+                batch_sizes, learning_rates, max_subgraph_sizes, alphas
             )
         )
 
