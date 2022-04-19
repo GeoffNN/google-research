@@ -59,6 +59,8 @@ flags.DEFINE_integer('pathfinder_resolution', 32,
 flags.DEFINE_integer('batch_size', 128, 'Training batch size')
 flags.DEFINE_integer('log_freq', 10,
                      'Log batch accuracy and loss every log_freq iterations.')
+flags.DEFINE_integer('plot_freq', 100,
+                     'Log image plots for a random train examples and first val points for each class every plot_freq iterations.')
 flags.DEFINE_integer('n_epochs', 5, 'Number of training epochs.')
 flags.DEFINE_float(
     'alpha', .1,
@@ -85,7 +87,7 @@ flags.DEFINE_integer('num_steps_extractor', 25,
 flags.DEFINE_bool('debug', False,
                   'If True, we only train over 1 batch before testing.')
 flags.DEFINE_float(
-    'ridge_backward', 1e-7,
+    'ridge_backward', 1e-6,
     'L2 regularization for the linear system used to compute'
     'the jvp of the subgraph selection layer.')
 
@@ -142,6 +144,7 @@ def training_loop(
     overfit=False,
     debug=False,
     log_freq=10,
+    plot_freq=20,
     test_log_freq=1,
 ):
   """Image classification training loop.
@@ -180,6 +183,8 @@ def training_loop(
     debug: If True, only perform 1 batch in train and 1 epoch total. Allows to
       debug both train and test.
     log_freq: Log train statistics every N batches.
+    plot_freq: Log image plots for a random train examples and first val points 
+      for each class every plot_freq iterations.
     test_log_freq: Compute test statistics every N epochs.
   """
 
@@ -208,7 +213,7 @@ def training_loop(
     raise ValueError(
         f"dataset must be in ['mnist', 'lra_pathfinder']. Got {dataset}.")
 
-  # These optimizers don't have to be the same.
+  # TODO(gnegiar): Add gradient clipping
   if optimizer == 'adam':
     optimizer = optax.adam(learning_rate)
   elif optimizer == 'sgd':
@@ -347,6 +352,9 @@ def training_loop(
       if np.isnan(loss):
         warnings.warn('Train loss was NaN.', RuntimeWarning)
 
+      elif loss < best_loss:
+        best_loss = loss
+
       # Log the loss
       if tensorboard_logdir is not None:
         if step % log_freq == 0:
@@ -364,6 +372,9 @@ def training_loop(
                 'graph_model_grad_norm', graph_model_grad_norm, step=step)
             tf.summary.scalar(
                 'agent_model_grad_norm', agent_model_grad_norm, step=step)
+
+        if step % plot_freq == 0:
+          with tf_logger_train.as_default():
             tf.summary.image(
                 'Training data',
                 train_utils.plot_to_image(
@@ -379,10 +390,10 @@ def training_loop(
             tf.summary.histogram('Node weights', q.data[0], step=step)
 
             # Plot subgraph on first test datapoint of each class
-            loss_rep, (preds_rep, logits_rep, q_rep) = forward(
+            loss_rep, (preds_rep, logits_rep, q_rep) = test_forward(
                 model_state, test_representatives_graphs,
                 test_representatives_graphs.sample_start_node_id(), rep_labels,
-                eval_config)
+                )
             del loss_rep, logits_rep
             tf.summary.image(
                 'Class representatives',
@@ -396,8 +407,6 @@ def training_loop(
                         num_classes)),
                 step=step)
 
-          if loss < best_loss:
-            best_loss = loss
 
 
       pipeline_update, opt_state = optimizer.update(model_grad, opt_state)
@@ -473,6 +482,8 @@ def main(argv):
       tensorboard_logdir=FLAGS.tensorboard_logdir,
       supernode=FLAGS.supernode,
       overfit=FLAGS.overfit,
+      log_freq=FLAGS.log_freq,
+      plot_freq=FLAGS.plot_freq,
       test_log_freq=FLAGS.test_log_freq,
       debug=FLAGS.debug,
   )
