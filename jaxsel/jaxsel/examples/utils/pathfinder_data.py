@@ -14,16 +14,16 @@
 # limitations under the License.
 
 """Utilities for loading the Pathfinder dataset."""
+import os
 
 from lra.lra_benchmarks.data import pathfinder
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
 
-# Please set this variable to the path for the LRA pathfinder data.
-_PATHFINDER_TFDS_PATH = None
+_PATHFINDER_TFDS_PATH = os.path.join("jaxsel", "data")
 
-
+print(f"Pathfinder data from: {_PATHFINDER_TFDS_PATH}")
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
