@@ -91,8 +91,8 @@ class SparseISTAExtractor(nn.Module):
   def _q_minus_grad(self, q, adjacency_matrix,
                     s):
     return _sum_with_nse(
-        (1 - self.config.alpha) * adjacency_matrix.T @ q,
-        -self.config.alpha * s,
+        .5 * (1 - self.config.alpha) * (q + adjacency_matrix.T @ q),
+        + self.config.alpha * s,
         nse=self.config.max_subgraph_size)
 
   def _sparse_softthresh(self, x):
@@ -317,7 +317,7 @@ def _sum_with_nse(mat, other_mat,
 def _dense_q_minus_grad(q, dense_adjacency_matrix,
                         s, alpha):
   """Computes q-grad on dense arguments."""
-  return (1. - alpha) * dense_adjacency_matrix.T @ q - alpha * s
+  return .5 * (1. - alpha) * (q + dense_adjacency_matrix.T @ q) + alpha * s
 
 
 def _softthresh(x, alpha, rho):
