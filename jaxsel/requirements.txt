@@ -1,6 +1,7 @@
 jax>=0.3.4
 --find-links https://storage.googleapis.com/jax-releases/jax_releases.html
 jax[cuda]>=0.3.4
+git+https://github.com/deepmind/chex.git
 numpy>=1.21
 flax>=0.4
 matplotlib>=3.5
