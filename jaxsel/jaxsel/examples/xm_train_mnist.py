@@ -19,6 +19,7 @@ def main(*args):
         spec = xm.PythonContainer(
             path=jaxsel_path,
             entrypoint=xm.ModuleName("jaxsel.examples.train"),
+            base_image='gcr.io/deeplearning-platform-release/base-cu113'
         )
 
         [executable] = experiment.package(
@@ -30,14 +31,20 @@ def main(*args):
             ]
         )
 
-        batch_sizes = [512] #, 64, 1024]
-        max_subgraph_sizes = [150 ] #, 200, 500]
-        learning_rates = [0.005]
-        alphas = [2e-4]
+        # batch_sizes = [64] 
+        # max_subgraph_sizes = [200] #, 200, 500]
+        # learning_rates = [5e-3, 3e-3, 1e-3]
+        # alphas = [2e-4]
+        # rhos = [0., 1e-5, 1e-6]
 
-        # TODO: Add fixed hyperparams here.
-        # common_args = {}
-        # TODO: add tensorboard logdir
+        # TODO(gnegiar): Large batch sizes
+
+        batch_sizes = [64] 
+        max_subgraph_sizes = [200] #, 200, 500]
+        learning_rates = [1e-3, 5e-4]
+        alphas = [2e-4]
+        rhos = [1e-4, 1e-5]
+        ridges = [1e-4, 1e-6]
 
         trials = list(
             dict(
@@ -45,11 +52,14 @@ def main(*args):
                     ("batch_size", bs),
                     ("learning_rate", lr),
                     ("max_subgraph_size", max_subgraph_size),
-                    ("alpha", alpha)
+                    ("alpha", alpha),
+                    ("rho", rho),
+                    ('n_epochs', 100),
+                    ('ridge_backward', ridge)
                 ]
             )
-            for (bs, lr, max_subgraph_size, alpha) in itertools.product(
-                batch_sizes, learning_rates, max_subgraph_sizes, alphas
+            for (bs, lr, max_subgraph_size, alpha, rho, ridge) in itertools.product(
+                batch_sizes, learning_rates, max_subgraph_sizes, alphas, rhos, ridges
             )
         )
 
@@ -64,6 +74,7 @@ def main(*args):
             output_dir = os.path.join(output_dir, exp_title)
 
             if output_dir:
+                # TODO(gnegiar): Understand how to show all runs on the same TB
                 output_dir = os.path.join(output_dir, str(experiment.experiment_id),
                                         str(i))
             tensorboard_capability = xm_local.TensorboardCapability(
