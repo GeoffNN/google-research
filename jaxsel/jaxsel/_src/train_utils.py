@@ -98,9 +98,9 @@ def plot_subgraph(img, q, label,
   # This may be due to the directed graph property.
   # Should we clip the weights to >0?
   norm_weighting = abs(weighting) / (EPS + abs(weighting).max())
-  ax.set_title(f'{label} (pred)')
+  ax.set_title(f'Pred: {label}')
   ax.imshow(img, cmap='gray_r', vmin=0., vmax=1.)
-  ax.imshow(weighting, alpha=norm_weighting, cmap='YlOrRd', vmax=.1)
+  ax.imshow(weighting, alpha=norm_weighting.clip(0., 1.), cmap='YlOrRd', vmax=.1)
   ax.contour(
       jnp.where(weighting != 0., 1., 0.),
       levels=0,  # Catch all positive weights
@@ -131,14 +131,14 @@ def plot_subgraph_classes(imgs, qs, labels,
     # Plot digit
     img = img.squeeze()
     ax.imshow(img, cmap='gray_r', vmin=0., vmax=1.)
-    ax.set_title(f'{label} (pred)')
+    ax.set_title(f'Pred: {label}')
     # Prep subgraph weighting
     graph_size = img.size
     weighting = q.todense()[:graph_size]
     weighting = weighting.reshape(img.shape)
     norm_weighting = abs(weighting) / (EPS + abs(weighting).max())
     # Plot subgraph
-    ax.imshow(weighting, alpha=norm_weighting, cmap='YlOrRd', vmax=.1)
+    ax.imshow(weighting, alpha=norm_weighting.clip(0., 1.), cmap='YlOrRd', vmax=.1)
     ax.contour(
         jnp.where(weighting != 0., 1., 0.),
         levels=0,  # Catch all nonzero weights
