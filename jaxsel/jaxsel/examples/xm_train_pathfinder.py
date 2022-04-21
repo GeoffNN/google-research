@@ -38,6 +38,9 @@ def main(*args):
         rhos = [0.]
         ridges = [1e-5, 1e-7]
 
+        resolution = 32
+        difficulty = 'easy'
+
         trials = list(
             dict(
                 [
@@ -52,8 +55,9 @@ def main(*args):
                     ('num_steps_extractor', 30),
                     ('n_encoder_layers', 8),
                     ('patch_size', 9),
-                    ('pathfinder_resolution', 32),
-                    ('pathfinder_difficulty', 'easy'),
+                    ('pathfinder_resolution', resolution),
+                    ('max_graph_size', resolution ** 2 + 10),
+                    ('pathfinder_difficulty', difficulty),
                 ]
             )
             for (bs, lr, max_subgraph_size, alpha, rho, ridge) in itertools.product(
