@@ -115,6 +115,8 @@ flags.DEFINE_bool(
     'supernode', False, 'if True, adds a supernode to the selected subgraph. '
     'The supernode is connected to all nodes.')
 flags.DEFINE_integer('test_log_freq', 1, 'Log test statistics every n epochs.')
+flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
+
 metrics = tf.keras.metrics
 
 
@@ -146,6 +148,7 @@ def training_loop(
     log_freq=10,
     plot_freq=20,
     test_log_freq=1,
+    seed=0,
 ):
   """Image classification training loop.
 
@@ -186,6 +189,7 @@ def training_loop(
     plot_freq: Log image plots for a random train examples and first val points 
       for each class every plot_freq iterations.
     test_log_freq: Compute test statistics every N epochs.
+    seed: Seed for the random number generator.
   """
 
   # TODO(gnegiar): Refactor this in utils.data
@@ -233,7 +237,7 @@ def training_loop(
   graph_parameters = graph.graph_parameters()
 
   # Initialize models
-  rng = jax.random.PRNGKey(123)
+  rng = jax.random.PRNGKey(seed)
 
   # TODO(gnegiar): Define configs outside of training loop, and pass as args.
   agent_config = agents.AgentConfig(graph_parameters, agent_hidden_dim,
@@ -486,6 +490,7 @@ def main(argv):
       plot_freq=FLAGS.plot_freq,
       test_log_freq=FLAGS.test_log_freq,
       debug=FLAGS.debug,
+      seed=FLAGS.seed
   )
 
 
