@@ -41,7 +41,7 @@ def main(*args):
 
         batch_sizes = [64] 
         max_subgraph_sizes = [200] #, 200, 500]
-        learning_rates = [1e-3, 5e-4]
+        learning_rates = [1e-5, 5e-4]
         alphas = [2e-4]
         rhos = [1e-4, 1e-5]
         ridges = [1e-4, 1e-6]
@@ -76,7 +76,8 @@ def main(*args):
             if output_dir:
                 # TODO(gnegiar): Understand how to show all runs on the same TB
                 output_dir = os.path.join(output_dir, str(experiment.experiment_id),
-                                        str(i))
+                                        # str(i)
+                                        )
             tensorboard_capability = xm_local.TensorboardCapability(
                 name=tensorboard, base_output_directory=output_dir)
 
