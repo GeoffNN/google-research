@@ -32,16 +32,17 @@ def main(*args):
         )
 
         batch_sizes = [32] 
-        max_subgraph_sizes = [200, 400] #, 200, 500]
-        learning_rates = [5e-5, 5e-4]
-        alphas = [2e-4]
-        rhos = [0.]
-        ridges = [1e-5, 1e-7]
+        max_subgraph_sizes = [300, 500] #, 200, 500]
+        learning_rates = [5e-5]
+        alphas = [2e-5]
+        rhos = [0, 1e-6, 1e-3]
+        ridges = [1e-5]
 
         resolution = 32
-        difficulty = 'easy'
+        difficulty = 'hard'
+        trials = {}
 
-        trials = list(
+        trials[32] = list(
             dict(
                 [
                     ("dataset", 'lra_pathfinder'),
@@ -51,13 +52,18 @@ def main(*args):
                     ("alpha", alpha),
                     ("rho", rho),
                     ('ridge_backward', ridge),
-                    ('n_epochs', 100),
+                    ('n_epochs', 200),
                     ('num_steps_extractor', 30),
-                    ('n_encoder_layers', 8),
+                    ('n_encoder_layers', 1),
+                    ('num_heads', 2),
+                    ('mlp_dim', 32),
+                    ('graph_model_hidden_dim', 32), 
+                    ('qkv_dim', 16),
                     ('patch_size', 9),
                     ('pathfinder_resolution', resolution),
                     ('max_graph_size', resolution ** 2 + 10),
                     ('pathfinder_difficulty', difficulty),
+                    ('seed', 0),
                 ]
             )
             for (bs, lr, max_subgraph_size, alpha, rho, ridge) in itertools.product(
@@ -70,7 +76,7 @@ def main(*args):
         tensorboard = vertex.get_default_client().get_or_create_tensorboard(exp_title)
         tensorboard = asyncio.get_event_loop().run_until_complete(tensorboard)
 
-        for i, hyperparameters in enumerate(trials):
+        for i, hyperparameters in enumerate(trials[resolution]):
 
             output_dir = os.environ.get('GOOGLE_CLOUD_BUCKET_NAME', None)
             output_dir = os.path.join(output_dir, exp_title)
@@ -78,7 +84,8 @@ def main(*args):
             if output_dir:
                 # TODO(gnegiar): Understand how to show all runs on the same TB
                 output_dir = os.path.join(output_dir, str(experiment.experiment_id),
-                                        str(i))
+                                        # str(i)
+                                        )
             tensorboard_capability = xm_local.TensorboardCapability(
                 name=tensorboard, base_output_directory=output_dir)
 
