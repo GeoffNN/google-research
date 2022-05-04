@@ -234,11 +234,12 @@ def training_loop(
   # This initializes graph_parameters,
   # used to initialize the Agent and Graph models.
   graph = image_graph.ImageGraph.create(
-      jnp.ones(image_shape),
+      jnp.ones(image_shape, dtype=int),
       lambda _: (14, 14),  # doesn't matter for initializing the model
       patch_size=patch_size,
       # binarized features + out of bounds pixel (+ supernode)
-      num_colors=len(bins) + 1 if supernode else len(bins))
+      num_colors=len(bins) + 2 if supernode else len(bins) + 1)
+  
   graph_parameters = graph.graph_parameters()
 
   # Initialize models
@@ -325,7 +326,7 @@ def training_loop(
           [make_graph(image, patch_size, bins) for image in data])
 
       rng_it, rng = jax.random.split(rng)
-      import pdb; pdb.set_trace()
+
       (loss, q), model_grad = value_grad_loss_fn(
           model_state,
           graphs,

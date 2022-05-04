@@ -233,7 +233,7 @@ def training_loop(
       lambda x: (14, 14),  # doesn't matter for initializing the model
       patch_size=patch_size,
       # binarized features + out of bounds pixel (+ supernode)
-      num_colors=len(bins) + 1 if supernode else len(bins))
+      num_colors=len(bins) + 2 if supernode else len(bins) + 1)
   graph_parameters = graph.graph_parameters()
 
   # Initialize models
