@@ -393,8 +393,6 @@ def training_loop(
       model_state = optax.apply_updates(model_state, pipeline_update)
       if debug:
         print(f'Loss on first train batch {loss}')
-        break
-      step += 1
 
       if step % test_log_freq == 0:
         for batch_test in tfds.as_numpy(test_dataset):
@@ -408,6 +406,11 @@ def training_loop(
 
           if loss_test < best_test_loss:
             best_test_loss = loss_test
+            print(f"Best loss: {best_test_loss}")
+
+          if debug:
+            print(f'Loss on first validation batch: {loss_test}')
+            break
 
         if tensorboard_logdir is not None:
           with tf_logger_test.as_default():
@@ -415,12 +418,14 @@ def training_loop(
 
           # Save checkpoint
           if loss_test == best_test_loss:
-            flax.training.checkpoints.save_checkpoint(os.path.join(tensorboard_logdir, "extractor_checkpoints"), model_state, step=step)
+            dir_path = os.path.join(tensorboard_logdir, "extractor_checkpoints")
+            os.mkdir(dir_path)
+            checkpoint_path = flax.training.checkpoints.save_checkpoint(dir_path, model_state, step=step)
+            print(f"Saved checkpoint {checkpoint_path}")
 
-        if debug:
-          print(f'Loss on first validation batch: {loss_test}')
-          break
-
+      step += 1
+      if debug:
+        break
   print('Finished training!')
 
 
