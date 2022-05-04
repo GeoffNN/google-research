@@ -92,7 +92,7 @@ class SparseISTAExtractor(nn.Module):
                     s):
     return _sum_with_nse(
         .5 * (1 - self.config.alpha) * (q + adjacency_matrix.T @ q),
-        + self.config.alpha * s,
+        self.config.alpha * s,
         nse=self.config.max_subgraph_size)
 
   def _sparse_softthresh(self, x):
