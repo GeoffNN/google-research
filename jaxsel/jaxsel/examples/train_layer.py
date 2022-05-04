@@ -39,6 +39,8 @@ import tensorflow_datasets as tfds
 
 import tqdm
 
+import shortuuid
+
 from jaxsel._src import agents
 from jaxsel._src import graph_models
 from jaxsel._src import image_graph
@@ -47,8 +49,6 @@ from jaxsel._src import subgraph_extractors
 from jaxsel._src import train_utils
 from jaxsel._src import tree_utils
 from jaxsel.examples.utils import data as data_utils
-
-import shortuuid
 
 
 FLAGS = flags.FLAGS
@@ -262,10 +262,11 @@ def training_loop(
     # Loss is guided by the pixel overlap w/ subgraph. A node should be included if it is dark.
     weighted_features = node_features[..., node_features.shape[-1] // 2] * q_star
     # Maximize overlap with high intensity pixels
-    loss_vals = - weighted_features.mean(axis=-1)
+    loss_vals = -weighted_features.mean(axis=-1)
     return loss_vals.mean(0), q
 
-  forward = jax.jit(functools.partial(forward, config=extractor_config))
+  forward = functools.partial(forward, config=extractor_config)
+#   forward = jax.jit(forward)
 
   # differentiate wrt model parameters
   value_grad_loss_fn = jax.value_and_grad(forward, has_aux=True)
@@ -324,7 +325,7 @@ def training_loop(
           [make_graph(image, patch_size, bins) for image in data])
 
       rng_it, rng = jax.random.split(rng)
-
+      import pdb; pdb.set_trace()
       (loss, q), model_grad = value_grad_loss_fn(
           model_state,
           graphs,
@@ -373,7 +374,7 @@ def training_loop(
                 model_state, test_representatives_graphs,
                 test_representatives_graphs.sample_start_node_id()
                 )
-            preds_rep = 'N/A'
+            preds_rep = ['N/A'] * 10
             del loss_rep
             tf.summary.image(
                 'Class representatives',
