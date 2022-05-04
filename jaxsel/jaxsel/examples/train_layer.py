@@ -29,7 +29,7 @@ import jax
 from jax.experimental import sparse as jsparse
 import jax.numpy as jnp
 
-import flax.linen as nn
+import flax.training.checkpoints
 
 import numpy as np
 import optax
@@ -117,7 +117,7 @@ flags.DEFINE_bool(
     'supernode', False, 'if True, adds a supernode to the selected subgraph. '
     'The supernode is connected to all nodes.')
 flags.DEFINE_bool('local', False, 'Pass if the run is local')
-flags.DEFINE_integer('test_log_freq', 1, 'Log test statistics every n epochs.')
+flags.DEFINE_integer('test_log_freq', 100, 'Log test statistics every n batches.')
 flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
 
 metrics = tf.keras.metrics
@@ -312,6 +312,7 @@ def training_loop(
 
   # For early stopping
   best_loss = jnp.inf
+  best_test_loss = jnp.inf
 
   print('Start training!')
   # TODO(gnegiar): Add description with loss to tqdm
@@ -387,8 +388,6 @@ def training_loop(
                         num_classes)),
                 step=step)
 
-
-
       pipeline_update, opt_state = optimizer.update(model_grad, opt_state)
 
       model_state = optax.apply_updates(model_state, pipeline_update)
@@ -397,23 +396,30 @@ def training_loop(
         break
       step += 1
 
-    if epoch % test_log_freq == 0:
-      for batch_test in tfds.as_numpy(test_dataset):
-        data_test, labels_test = batch_test
-        # TODO(gnegiar): build the graphs once before hand, in the dataloading
-        graphs_test = tree_utils.tree_stack(
-            [make_graph(image, patch_size, bins) for image in data_test])
+      if step % test_log_freq == 0:
+        for batch_test in tfds.as_numpy(test_dataset):
+          data_test, labels_test = batch_test
+          # TODO(gnegiar): build the graphs once before hand, in the dataloading
+          graphs_test = tree_utils.tree_stack(
+              [make_graph(image, patch_size, bins) for image in data_test])
 
-        loss_test, q = forward(model_state, graphs_test,
-                                      graphs_test.sample_start_node_id())
+          loss_test, q = forward(model_state, graphs_test,
+                                        graphs_test.sample_start_node_id())
 
-      if tensorboard_logdir is not None:
-        with tf_logger_test.as_default():
-          tf.summary.scalar('loss', loss_test, step=step)
+          if loss_test < best_test_loss:
+            best_test_loss = loss_test
 
-      if debug:
-        print(f'Loss on first validation batch {loss_test}')
-        break
+        if tensorboard_logdir is not None:
+          with tf_logger_test.as_default():
+            tf.summary.scalar('loss', loss_test, step=step)
+
+          # Save checkpoint
+          if loss_test == best_test_loss:
+            flax.training.checkpoints.save_checkpoint(os.path.join(tensorboard_logdir, "extractor_checkpoints"), model_state, step=step)
+
+        if debug:
+          print(f'Loss on first validation batch: {loss_test}')
+          break
 
   print('Finished training!')
 
@@ -432,7 +438,9 @@ def main(argv):
 
   if local:
     run_gen = shortuuid.ShortUUID(alphabet=list("0123456789abcdefghijklmnopqrstuvwxyz"))
-    tensorboard_logdir = os.path.join(tensorboard_logdir, run_gen.random(8))
+    run_id = run_gen.random(8)
+    print(f"Run ID: {run_id}")
+    tensorboard_logdir = os.path.join(tensorboard_logdir, run_id)
 
   training_loop(
       optimizer=FLAGS.optimizer,
