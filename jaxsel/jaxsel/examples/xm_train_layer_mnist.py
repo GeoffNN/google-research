@@ -11,7 +11,7 @@ import os
 
 def main(*args):
     del args
-    exp_title = "jaxsel/pathfinder"
+    exp_title = "jaxsel/mnist_layer"
 
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dockerfile')) as f:
         docker_instructions = f.readlines()
@@ -21,7 +21,7 @@ def main(*args):
         jaxsel_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         spec = xm.PythonContainer(
             path=jaxsel_path,
-            entrypoint=xm.ModuleName("jaxsel.examples.train"),
+            entrypoint=xm.ModuleName("jaxsel.examples.train_layer"),
             base_image='gcr.io/deeplearning-platform-release/base-cu113',
             docker_instructions=docker_instructions
         )
@@ -35,39 +35,32 @@ def main(*args):
             ]
         )
 
-        batch_sizes = [32] 
-        max_subgraph_sizes = [300, 500] #, 200, 500]
-        learning_rates = [5e-5]
-        alphas = [2e-5]
-        rhos = [0, 1e-6, 1e-3]
-        ridges = [1e-5]
+        # batch_sizes = [64] 
+        # max_subgraph_sizes = [200] #, 200, 500]
+        # learning_rates = [5e-3, 3e-3, 1e-3]
+        # alphas = [2e-4]
+        # rhos = [0., 1e-5, 1e-6]
 
-        resolution = 32
-        difficulty = 'hard'
-        trials = {}
+        batch_sizes = [64] 
+        max_subgraph_sizes = [200] #, 200, 500]
+        learning_rates = [1e-5, 5e-4]
+        alphas = [2e-4]
+        rhos = [1e-4, 1e-5]
+        ridges = [1e-4, 1e-6]
 
-        trials[32] = list(
+        trials = list(
             dict(
                 [
-                    ("dataset", 'lra_pathfinder'),
                     ("batch_size", bs),
                     ("learning_rate", lr),
                     ("max_subgraph_size", max_subgraph_size),
                     ("alpha", alpha),
                     ("rho", rho),
+                    ('n_epochs', 5),
                     ('ridge_backward', ridge),
-                    ('n_epochs', 200),
-                    ('num_steps_extractor', 30),
-                    ('n_encoder_layers', 1),
-                    ('num_heads', 2),
-                    ('mlp_dim', 32),
-                    ('graph_model_hidden_dim', 32), 
-                    ('qkv_dim', 16),
-                    ('patch_size', 9),
-                    ('pathfinder_resolution', resolution),
-                    ('max_graph_size', resolution ** 2 + 10),
-                    ('pathfinder_difficulty', difficulty),
-                    ('seed', 0),
+                    ('plot_freq', 50),
+                    ('test_log_freq', 1000),
+                    ('seed', 123),
                 ]
             )
             for (bs, lr, max_subgraph_size, alpha, rho, ridge) in itertools.product(
@@ -80,7 +73,7 @@ def main(*args):
         tensorboard = vertex.get_default_client().get_or_create_tensorboard(exp_title)
         tensorboard = asyncio.get_event_loop().run_until_complete(tensorboard)
 
-        for i, hyperparameters in enumerate(trials[resolution]):
+        for i, hyperparameters in enumerate(trials):
 
             output_dir = os.environ.get('GOOGLE_CLOUD_BUCKET_NAME', None)
             output_dir = os.path.join(output_dir, exp_title)

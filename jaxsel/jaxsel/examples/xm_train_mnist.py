@@ -12,6 +12,10 @@ import os
 def main(*args):
     del args
     exp_title = "jaxsel/mnist"
+
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dockerfile')) as f:
+        docker_instructions = f.readlines()
+
     with xm_local.create_experiment(experiment_title=exp_title) as experiment:
         # Get path of the jaxsel module. 3 directories up from this file for correct requirements.txt
         # TODO: Make an examples/requirements and add LRA
@@ -19,7 +23,8 @@ def main(*args):
         spec = xm.PythonContainer(
             path=jaxsel_path,
             entrypoint=xm.ModuleName("jaxsel.examples.train"),
-            base_image='gcr.io/deeplearning-platform-release/base-cu113'
+            base_image='gcr.io/deeplearning-platform-release/base-cu113',
+            docker_instructions=docker_instructions
         )
 
         [executable] = experiment.package(
@@ -76,7 +81,7 @@ def main(*args):
             if output_dir:
                 # TODO(gnegiar): Understand how to show all runs on the same TB
                 output_dir = os.path.join(output_dir, str(experiment.experiment_id),
-                                        # str(i)
+                                        str(i)
                                         )
             tensorboard_capability = xm_local.TensorboardCapability(
                 name=tensorboard, base_output_directory=output_dir)

@@ -11,7 +11,7 @@ import os
 
 def main(*args):
     del args
-    exp_title = "jaxsel/pathfinder"
+    exp_title = "jaxsel/pathfinder_layer"
 
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dockerfile')) as f:
         docker_instructions = f.readlines()
@@ -67,7 +67,9 @@ def main(*args):
                     ('pathfinder_resolution', resolution),
                     ('max_graph_size', resolution ** 2 + 10),
                     ('pathfinder_difficulty', difficulty),
-                    ('seed', 0),
+                    ('plot_freq', 50),
+                    ('test_log_freq', 1000),
+                    ('seed', 123),
                 ]
             )
             for (bs, lr, max_subgraph_size, alpha, rho, ridge) in itertools.product(

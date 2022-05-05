@@ -117,7 +117,7 @@ flags.DEFINE_bool(
     'supernode', False, 'if True, adds a supernode to the selected subgraph. '
     'The supernode is connected to all nodes.')
 flags.DEFINE_bool('local', False, 'Pass if the run is local')
-flags.DEFINE_integer('test_log_freq', 100, 'Log test statistics every n batches.')
+flags.DEFINE_integer('test_log_freq', 1000, 'Log test statistics every n batches.')
 flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
 
 metrics = tf.keras.metrics
@@ -150,7 +150,7 @@ def training_loop(
     supernode=False,
     overfit=False,
     debug=False,
-    log_freq=10,
+    log_freq=1,
     plot_freq=20,
     test_log_freq=1,
     seed=0,
@@ -395,22 +395,24 @@ def training_loop(
         print(f'Loss on first train batch {loss}')
 
       if step % test_log_freq == 0:
+        losses_test = []
         for batch_test in tfds.as_numpy(test_dataset):
           data_test, labels_test = batch_test
           # TODO(gnegiar): build the graphs once before hand, in the dataloading
           graphs_test = tree_utils.tree_stack(
               [make_graph(image, patch_size, bins) for image in data_test])
 
-          loss_test, q = forward(model_state, graphs_test,
+          loss_test_batch, q = forward(model_state, graphs_test,
                                         graphs_test.sample_start_node_id())
-
-          if loss_test < best_test_loss:
-            best_test_loss = loss_test
-            print(f"Best loss: {best_test_loss}")
+          losses_test.append(loss_test_batch)
 
           if debug:
-            print(f'Loss on first validation batch: {loss_test}')
             break
+        
+        loss_test = np.mean(losses_test)
+        if loss_test < best_test_loss:
+          best_test_loss = loss_test
+          print(f"Best test loss: {best_test_loss}")
 
         if tensorboard_logdir is not None:
           with tf_logger_test.as_default():
@@ -419,7 +421,7 @@ def training_loop(
           # Save checkpoint
           if loss_test == best_test_loss:
             dir_path = os.path.join(tensorboard_logdir, "extractor_checkpoints")
-            os.mkdir(dir_path)
+            os.makedirs(dir_path)
             checkpoint_path = flax.training.checkpoints.save_checkpoint(dir_path, model_state, step=step)
             print(f"Saved checkpoint {checkpoint_path}")
 
