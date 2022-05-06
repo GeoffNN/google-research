@@ -256,16 +256,30 @@ def training_loop(
   def forward(params, graphs, start_node_ids, config, rng=None):
     extractor = subgraph_extractors.SparseISTAExtractor(config)
     q_star, node_features, node_ids, dense_submat, q, adjacency_matrix, error = jax.vmap(extractor.apply, (None, 0, 0))(params, start_node_ids, graphs)
-    del node_ids, dense_submat, adjacency_matrix, error
+    del dense_submat, adjacency_matrix, error, node_features
+    image_shape = graphs.image.shape[1:]
+    graph_size = graphs.image[0].squeeze().size
+    # Get q as an image and normalize
+    batch_size = q_star.shape[0]
+    q_images = jnp.zeros((batch_size, graph_size))
+    q_images = q_images.at[jnp.arange(batch_size), node_ids.T].set(q_star.T)
+    q_images = q_images.reshape(batch_size, *image_shape)
+    q_images_norm = q_images / q_images.sum(axis=(1, 2), keepdims=True)
+    # Normalize image
+    images = jnp.clip(graphs.image - 1, a_min=0)  # get rid of the shift due to the -1 node
+    images_norm = images / images.sum(axis=(1, 2), keepdims=True)
+    loss_vals = -((q_images_norm * images_norm).reshape(-1, graph_size) ** (1/3)).sum(-1)
 
-    # Loss is guided by the pixel overlap w/ subgraph. A node should be included if it is dark.
-    weighted_features = node_features[..., node_features.shape[-1] // 2] * q_star
-    # Maximize overlap with high intensity pixels
-    loss_vals = -weighted_features.mean(axis=-1)
+    # Compute loss: elastic distance between normalized q and normalized image
+    # diff = (q_images_norm - images_norm).reshape(-1, graph_size)
+    # t = .1
+    # loss_vals_l1 = jnp.abs(diff).sum(-1)
+    # loss_vals_l2 = (diff ** 2).sum(-1)
+    # loss_vals = (1 - t) * loss_vals_l1 + t * loss_vals_l2
     return loss_vals.mean(0), q
 
   forward = functools.partial(forward, config=extractor_config)
-#   forward = jax.jit(forward)
+  forward = jax.jit(forward)
 
   # differentiate wrt model parameters
   value_grad_loss_fn = jax.value_and_grad(forward, has_aux=True)
@@ -393,7 +407,8 @@ def training_loop(
       model_state = optax.apply_updates(model_state, pipeline_update)
       if debug:
         print(f'Loss on first train batch {loss}')
-
+      
+      step += 1
       if step % test_log_freq == 0:
         losses_test = []
         for batch_test in tfds.as_numpy(test_dataset):
@@ -425,7 +440,6 @@ def training_loop(
             checkpoint_path = flax.training.checkpoints.save_checkpoint(dir_path, model_state, step=step)
             print(f"Saved checkpoint {checkpoint_path}")
 
-      step += 1
       if debug:
         break
   print('Finished training!')
