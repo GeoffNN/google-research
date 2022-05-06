@@ -21,7 +21,7 @@ def main(*args):
         jaxsel_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         spec = xm.PythonContainer(
             path=jaxsel_path,
-            entrypoint=xm.ModuleName("jaxsel.examples.train"),
+            entrypoint=xm.ModuleName("jaxsel.examples.train_layer"),
             base_image='gcr.io/deeplearning-platform-release/base-cu113',
             docker_instructions=docker_instructions
         )
