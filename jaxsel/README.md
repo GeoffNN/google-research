@@ -44,3 +44,9 @@ suite.
 
 Launch an experiment by running: `python -m jaxsel.examples.train --dataset
 mnist` from the `google_research` directory.
+
+To launch an experiment using the XManager launch files, do
+
+```
+xmanager launch jaxsel/examples/xm_train_***.py
+```
