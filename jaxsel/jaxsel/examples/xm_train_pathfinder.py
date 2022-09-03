@@ -37,9 +37,10 @@ def main(*args):
 
         batch_sizes = [32] 
         max_subgraph_sizes = [300, 500] #, 200, 500]
+        curiosity_weights = [0., 1.]
         learning_rates = [5e-5]
         alphas = [2e-5]
-        rhos = [0, 1e-6, 1e-3]
+        rhos = [0, 1e-3]
         ridges = [1e-5]
 
         resolution = 32
@@ -64,14 +65,15 @@ def main(*args):
                     ('graph_model_hidden_dim', 32), 
                     ('qkv_dim', 16),
                     ('patch_size', 9),
+                    ('curiosity_weight', curiosity_weight)
                     ('pathfinder_resolution', resolution),
                     ('max_graph_size', resolution ** 2 + 10),
                     ('pathfinder_difficulty', difficulty),
                     ('seed', 0),
                 ]
             )
-            for (bs, lr, max_subgraph_size, alpha, rho, ridge) in itertools.product(
-                batch_sizes, learning_rates, max_subgraph_sizes, alphas, rhos, ridges
+            for (bs, lr, max_subgraph_size, alpha, rho, ridge, curiosity_weight) in itertools.product(
+                batch_sizes, learning_rates, max_subgraph_sizes, alphas, rhos, ridges, curiosity_weights
             )
         )
 

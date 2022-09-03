@@ -46,6 +46,7 @@ class ClassificationPipelineConfig:
   graph_classifier_config: graph_models.TransformerConfig
   supernode: bool = False
   use_node_weights: bool = True
+  curiosity_weight: float = 0.
 
 
 class ClassificationPipeline(nn.Module):
@@ -105,6 +106,25 @@ class ClassificationPipeline(nn.Module):
     else:
       return losses.binary_logistic_loss(logits, label, num_classes=num_classes)
 
+  def curiosity_loss_fun(self, image, q, node_ids):
+    """Computes the curiosity loss function.py
+    
+    This loss function encourages exploration, similarly to 
+    exploration bonuses in RL.
+    since we are considering black & white image problems, 
+    we start by encouraging selection of white pixels.
+    """
+    # Make dense version of q to match the image shape
+    q_image = jnp.zeros_like(image.flatten())
+    q_image = q_image.at[node_ids.T].set(q.T)
+    q_image = q_image.reshape(*image.shape)
+    # Normalize
+    q_image_norm = q_image / q_image.sum(keepdims=True)
+    image = jnp.clip(image - 1, a_min=0)  # get rid of the shift due to the -1 node
+    image_norm = image / image.sum(keepdims=True)
+    return (-q_image_norm * image_norm).sum() # + q_image_norm * (1 - image_norm)
+
+
   def pred_fun(self, logits):
     """Computes the model's predicted class."""
     num_classes = self.config.graph_classifier_config.num_classes
@@ -152,7 +172,7 @@ class ClassificationPipeline(nn.Module):
         # qstar=10 * (dense_q**2)**(1. / 8),  # normalizing for scale
     )
 
-    return logits, (q, dense_submat)
+    return logits, (q, dense_submat, node_ids)
 
   @functools.partial(
       nn.vmap,
@@ -176,7 +196,10 @@ class ClassificationPipeline(nn.Module):
       loss_value: value of the loss for the given graph.
     """
     # Extract subgraph and associated features
-    logits, (q, dense_submat) = self(graphs, start_node_ids)
+    cfg = self.config
+    logits, (q, dense_submat, node_ids) = self(graphs, start_node_ids)
     del dense_submat
     preds = self.pred_fun(logits)
-    return self.loss_fun(logits, labels), (preds, logits, q)
+    # TODO: Add curiosity loss here.
+    loss_vals = self.loss_fun(logits, labels) + cfg.curiosity_weight * self.curiosity_loss_fun(graphs.image, q, node_ids)
+    return loss_vals, (preds, logits, q)

@@ -114,6 +114,9 @@ flags.DEFINE_bool(
 flags.DEFINE_bool(
     'supernode', False, 'if True, adds a supernode to the selected subgraph. '
     'The supernode is connected to all nodes.')
+flags.DEFINE_float(
+  'curiosity_weight', 0., 'Weight for curiosity driving loss function.'
+)
 flags.DEFINE_integer('test_log_freq', 1, 'Log test statistics every n epochs.')
 flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
 
@@ -142,6 +145,7 @@ def training_loop(
     num_steps_extractor,
     agent_hidden_dim,
     n_encoder_layers,
+    curiosity_weight=0.,
     supernode=False,
     overfit=False,
     debug=False,
@@ -179,6 +183,7 @@ def training_loop(
     agent_hidden_dim: Embedding dimension for task, nodes and edges in the agent
       model.
     n_encoder_layers: Depth of the graph encoder model.
+    curiosity_weight: Weight for curiosity loss.
     supernode: whether to add a supernode to the extracted subgraph. The
       supernode is connected to all ndoes in the subgraph, and is an attempt to
       get by range issues on the subgraph.
@@ -259,7 +264,8 @@ def training_loop(
       num_classes=num_classes)
 
   train_config = pipeline.ClassificationPipelineConfig(extractor_config,
-                                                       graph_classifier_config)
+                                                       graph_classifier_config,
+                                                       curiosity_weight=curiosity_weight)
 
   eval_config = pipeline.ClassificationPipelineConfig(
       extractor_config, graph_classifier_config.replace(deterministic=True))
@@ -484,6 +490,7 @@ def main(argv):
       n_epochs=FLAGS.n_epochs,
       ridge=FLAGS.ridge_backward,
       tensorboard_logdir=FLAGS.tensorboard_logdir,
+      curiosity_weight=FLAGS.curiosity_weight,
       supernode=FLAGS.supernode,
       overfit=FLAGS.overfit,
       log_freq=FLAGS.log_freq,
