@@ -65,7 +65,7 @@ def main(*args):
                     ('graph_model_hidden_dim', 32), 
                     ('qkv_dim', 16),
                     ('patch_size', 9),
-                    ('curiosity_weight', curiosity_weight)
+                    ('curiosity_weight', curiosity_weight),
                     ('pathfinder_resolution', resolution),
                     ('max_graph_size', resolution ** 2 + 10),
                     ('pathfinder_difficulty', difficulty),
