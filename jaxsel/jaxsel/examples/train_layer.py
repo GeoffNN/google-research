@@ -123,8 +123,6 @@ flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
 metrics = tf.keras.metrics
 
 
-
-
 def training_loop(
     optimizer,
     patch_size,
@@ -268,14 +266,14 @@ def training_loop(
     # Normalize image
     images = jnp.clip(graphs.image - 1, a_min=0)  # get rid of the shift due to the -1 node
     images_norm = images / images.sum(axis=(1, 2), keepdims=True)
-    loss_vals = -((q_images_norm * images_norm).reshape(-1, graph_size) ** (1/3)).sum(-1)
+    # Favor black pixels
+    diff_norm = (q_images_norm - images_norm).reshape(-1, graph_size)
+    loss_vals = (diff_norm ** 2).sum(-1)
+    # loss_vals = -((jnp.abs(q_images_norm * images_norm)).reshape(-1, graph_size) ** (1/3)).sum(-1)
+    # Penalize white pixels
+    # loss_vals -= jnp.abs(q_images_norm - (images_norm == 0)).reshape(-1, graph_size).sum(-1)
+    # TODO(gnegiar): Try L2 with different weights for black/white pixels 
 
-    # Compute loss: elastic distance between normalized q and normalized image
-    # diff = (q_images_norm - images_norm).reshape(-1, graph_size)
-    # t = .1
-    # loss_vals_l1 = jnp.abs(diff).sum(-1)
-    # loss_vals_l2 = (diff ** 2).sum(-1)
-    # loss_vals = (1 - t) * loss_vals_l1 + t * loss_vals_l2
     return loss_vals.mean(0), q
 
   forward = functools.partial(forward, config=extractor_config)
