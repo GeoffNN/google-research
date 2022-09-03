@@ -7,11 +7,13 @@ RUN sudo sed -i "/developer\.download\.nvidia\.com\/compute\/cuda\/repos/d" /etc
 RUN apt-get update
 RUN apt-get install -y git netcat
 RUN python -m pip install --upgrade pip
+RUN pip install --upgrade "jax[cpu]"
+RUN pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 COPY jaxsel/requirements.txt /jaxsel/requirements.txt
 RUN python -m pip install -r jaxsel/requirements.txt
 COPY jaxsel/ /jaxsel
 RUN chown -R 1000:root /jaxsel && chmod -R 775 /jaxsel
-WORKDIR jaxsel
+WORKDIR /jaxsel
 COPY entrypoint.sh ./entrypoint.sh
 RUN chown -R 1000:root ./entrypoint.sh && chmod -R 775 ./entrypoint.sh
 ENTRYPOINT ["./entrypoint.sh"]
