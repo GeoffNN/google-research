@@ -119,11 +119,15 @@ class ClassificationPipeline(nn.Module):
     q_image = q_image.at[node_ids.T].set(q.T)
     q_image = q_image.reshape(*image.shape)
     # Normalize
-    q_image_norm = q_image / q_image.sum(keepdims=True)
     image = jnp.clip(image - 1, a_min=0)  # get rid of the shift due to the -1 node
-    image_norm = image / image.sum(keepdims=True)
-    return (-q_image_norm * image_norm).sum() # + q_image_norm * (1 - image_norm)
+    image_sum = image.sum(keepdims=True)
 
+    image_norm = image / image_sum
+    q_image_norm = q_image / image_sum
+
+    loss = ((q_image_norm - image_norm) ** 2).mean()
+    # loss = (-q_image_norm * image_norm).sum() # + q_image_norm * (1 - image_norm)
+    return loss
 
   def pred_fun(self, logits):
     """Computes the model's predicted class."""
@@ -172,7 +176,7 @@ class ClassificationPipeline(nn.Module):
         # qstar=10 * (dense_q**2)**(1. / 8),  # normalizing for scale
     )
 
-    return logits, (q, dense_submat, node_ids)
+    return logits, (q, dense_submat, node_ids, dense_q)
 
   @functools.partial(
       nn.vmap,
@@ -197,9 +201,9 @@ class ClassificationPipeline(nn.Module):
     """
     # Extract subgraph and associated features
     cfg = self.config
-    logits, (q, dense_submat, node_ids) = self(graphs, start_node_ids)
+    logits, (q, dense_submat, node_ids, dense_q) = self(graphs, start_node_ids)
     del dense_submat
     preds = self.pred_fun(logits)
     # TODO: Add curiosity loss here.
-    loss_vals = self.loss_fun(logits, labels) + cfg.curiosity_weight * self.curiosity_loss_fun(graphs.image, q, node_ids)
+    loss_vals = self.loss_fun(logits, labels) + cfg.curiosity_weight * self.curiosity_loss_fun(graphs.image, dense_q, node_ids)
     return loss_vals, (preds, logits, q)
