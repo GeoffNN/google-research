@@ -205,5 +205,7 @@ class ClassificationPipeline(nn.Module):
     del dense_submat
     preds = self.pred_fun(logits)
     # TODO: Add curiosity loss here.
-    loss_vals = self.loss_fun(logits, labels) + cfg.curiosity_weight * self.curiosity_loss_fun(graphs.image, dense_q, node_ids)
-    return loss_vals, (preds, logits, q)
+    label_loss = self.loss_fun(logits, labels)
+    curiosity_loss = self.curiosity_loss_fun(graphs.image, dense_q, node_ids) if cfg.curiosity_weight > 0. else 0.
+    loss_vals = label_loss + cfg.curiosity_weight * curiosity_loss
+    return loss_vals, (preds, logits, q, label_loss, curiosity_loss)

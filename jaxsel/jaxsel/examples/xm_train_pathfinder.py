@@ -1,5 +1,6 @@
 """Launch an MNIST experiment."""
 
+from datetime import datetime
 from xmanager import xm
 from xmanager import xm_local
 import itertools
@@ -11,7 +12,8 @@ import os
 
 def main(*args):
     del args
-    exp_title = "jaxsel/pathfinder"
+    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    exp_title = f"jaxsel/pathfinder_{date}"
 
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dockerfile')) as f:
         docker_instructions = f.readlines()
@@ -35,16 +37,16 @@ def main(*args):
             ]
         )
 
-        batch_sizes = [32] 
+        batch_sizes = [32]
         max_subgraph_sizes = [300, 500] #, 200, 500]
-        curiosity_weights = [0., 1.]
+        curiosity_weights = [1.]
         learning_rates = [5e-5]
         alphas = [2e-5]
         rhos = [0, 1e-3]
         ridges = [1e-5]
 
         resolution = 32
-        difficulty = 'hard'
+        difficulty = 'easy'
         trials = {}
 
         trials[32] = list(

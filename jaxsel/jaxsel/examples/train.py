@@ -273,14 +273,14 @@ def training_loop(
   # Define loss over the full model.
   def forward(params, graphs, start_node_ids, labels, config, rng=None):
     model = pipeline.ClassificationPipeline(config)
-    loss_vals, (preds, logits, q) = model.apply(
+    loss_vals, (preds, logits, q, label_loss, curiosity_loss) = model.apply(
         params,
         graphs,
         start_node_ids,
         labels,
         rngs={'dropout': rng} if rng is not None else None,
         method=model.compute_loss)
-    return loss_vals.mean(0), (preds, logits, q)
+    return loss_vals.mean(0), (preds, logits, q, label_loss.mean(0), curiosity_loss.mean(0))
 
   test_forward = jax.jit(functools.partial(forward, config=eval_config))
 
@@ -347,7 +347,7 @@ def training_loop(
       # Use the results inside a JAX implicit differentiation construction.
       rng_it, rng = jax.random.split(rng)
 
-      (loss, (preds, logits, q)), model_grad = value_grad_loss_fn(
+      (loss, (preds, logits, q, label_loss, curiosity_loss)), model_grad = value_grad_loss_fn(
           model_state,
           graphs,
           graphs.sample_start_node_id(),
@@ -377,6 +377,9 @@ def training_loop(
 
           with tf_logger_train.as_default():
             tf.summary.scalar('loss', loss, step=step)
+            tf.summary.scalar('loss_label', label_loss, step=step)
+            tf.summary.scalar('loss_curiosity', curiosity_loss, step=step)
+
             tf.summary.scalar('accuracy', batch_accuracy, step=step)
             tf.summary.scalar(
                 'graph_model_grad_norm', graph_model_grad_norm, step=step)
@@ -400,7 +403,7 @@ def training_loop(
             tf.summary.histogram('Node weights', q.data[0], step=step)
 
             # Plot subgraph on first test datapoint of each class
-            loss_rep, (preds_rep, logits_rep, q_rep) = test_forward(
+            loss_rep, (preds_rep, logits_rep, q_rep, label_loss, curiosity_loss) = test_forward(
                 model_state, test_representatives_graphs,
                 test_representatives_graphs.sample_start_node_id(), rep_labels,
                 )
@@ -435,7 +438,7 @@ def training_loop(
             [make_graph(image, patch_size, bins) for image in data_test])
 
         loss_test, (preds, logits,
-                    q) = test_forward(model_state, graphs_test,
+                    q, label_loss_test, curiosity_loss_test) = test_forward(model_state, graphs_test,
                                       graphs_test.sample_start_node_id(),
                                       labels_test)
 
@@ -449,6 +452,9 @@ def training_loop(
         with tf_logger_test.as_default():
           tf.summary.scalar('accuracy', test_accuracy_value, step=step)
           tf.summary.scalar('loss', loss_test, step=step)
+          tf.summary.scalar('loss_label', label_loss_test, step=step)
+          tf.summary.scalar('loss_curiosity', curiosity_loss_test, step=step)
+
       # Reset metric for next epoch.
       test_accuracy.reset_state()
 
