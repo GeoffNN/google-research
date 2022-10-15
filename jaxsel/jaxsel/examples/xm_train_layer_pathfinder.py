@@ -39,7 +39,7 @@ def main(*args):
         max_subgraph_sizes = [300, 500] #, 200, 500]
         learning_rates = [5e-5]
         alphas = [2e-5]
-        rhos = [0, 1e-6, 1e-3]
+        rhos = [0, 1e-3]
         ridges = [1e-5]
 
         resolution = 32

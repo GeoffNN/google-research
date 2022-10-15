@@ -56,7 +56,7 @@ def main(*args):
                     ("max_subgraph_size", max_subgraph_size),
                     ("alpha", alpha),
                     ("rho", rho),
-                    ('n_epochs', 5),
+                    ('n_epochs', 50),
                     ('ridge_backward', ridge),
                     ('plot_freq', 50),
                     ('test_log_freq', 1000),
