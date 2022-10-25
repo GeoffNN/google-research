@@ -47,6 +47,9 @@ def main(*args):
         batch_sizes = [64] 
         max_subgraph_sizes = [200] #, 200, 500]
         learning_rates = [1e-5, 5e-4]
+        curiosity_weights = [1.]
+        entropy_weights = [1e-2]
+        label_weights = [0.]
         alphas = [2e-4]
         rhos = [1e-4, 1e-5]
         ridges = [1e-4, 1e-6]
@@ -60,11 +63,14 @@ def main(*args):
                     ("alpha", alpha),
                     ("rho", rho),
                     ('n_epochs', 100),
-                    ('ridge_backward', ridge)
+                    ('ridge_backward', ridge),
+                    ('curiosity_weight', curiosity_weight),
+                    ('entropy_weight', entropy_weight),
+                    ('label_weight', label_weight)
                 ]
             )
-            for (bs, lr, max_subgraph_size, alpha, rho, ridge) in itertools.product(
-                batch_sizes, learning_rates, max_subgraph_sizes, alphas, rhos, ridges
+            for (bs, lr, max_subgraph_size, alpha, rho, ridge,curiosity_weight, label_weight, entropy_weight) in itertools.product(
+                batch_sizes, learning_rates, max_subgraph_sizes, alphas, rhos, ridges, curiosity_weights, label_weights, entropy_weights
             )
         )
 

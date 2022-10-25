@@ -38,15 +38,17 @@ def main(*args):
         )
 
         batch_sizes = [32]
-        max_subgraph_sizes = [300, 500] #, 200, 500]
-        curiosity_weights = [1.]
+        max_subgraph_sizes = [300] #, 200, 500]
+        curiosity_weights = [1., 0.]
+        label_weights = [0., 1.]
+        entropy_weights = [10.]
         learning_rates = [5e-5]
         alphas = [2e-5]
-        rhos = [0, 1e-3]
+        rhos = [1e-4]
         ridges = [1e-5]
 
         resolution = 32
-        difficulty = 'easy'
+        difficulty = 'hard'
         trials = {}
 
         trials[32] = list(
@@ -68,14 +70,16 @@ def main(*args):
                     ('qkv_dim', 16),
                     ('patch_size', 9),
                     ('curiosity_weight', curiosity_weight),
+                    ('label_weight', label_weight),
+                    ('entropy_weight', entropy_weight),
                     ('pathfinder_resolution', resolution),
                     ('max_graph_size', resolution ** 2 + 10),
                     ('pathfinder_difficulty', difficulty),
                     ('seed', 0),
                 ]
             )
-            for (bs, lr, max_subgraph_size, alpha, rho, ridge, curiosity_weight) in itertools.product(
-                batch_sizes, learning_rates, max_subgraph_sizes, alphas, rhos, ridges, curiosity_weights
+            for (bs, lr, max_subgraph_size, alpha, rho, ridge, curiosity_weight, label_weight, entropy_weight) in itertools.product(
+                batch_sizes, learning_rates, max_subgraph_sizes, alphas, rhos, ridges, curiosity_weights, label_weights, entropy_weights
             )
         )
 

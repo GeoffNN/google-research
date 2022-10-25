@@ -47,6 +47,8 @@ class ClassificationPipelineConfig:
   supernode: bool = False
   use_node_weights: bool = True
   curiosity_weight: float = 0.
+  entropy_weight: float = 0.
+  label_weight: float = 1.
 
 
 class ClassificationPipeline(nn.Module):
@@ -57,7 +59,7 @@ class ClassificationPipeline(nn.Module):
   def setup(self):
     self.extractor = subgraph_extractors.SparseISTAExtractor(
         config=self.config.extractor_config)
-    self.graph_classifier = graph_models.TransformerClassifier(
+    self.graph_classifier = graph_models.SimpleGraphClassifier(
         config=self.config.graph_classifier_config)
 
   def _add_supernode(
@@ -107,26 +109,23 @@ class ClassificationPipeline(nn.Module):
       return losses.binary_logistic_loss(logits, label, num_classes=num_classes)
 
   def curiosity_loss_fun(self, image, q, node_ids):
-    """Computes the curiosity loss function.py
+    """Computes the curiosity loss function.
     
     This loss function encourages exploration, similarly to 
     exploration bonuses in RL.
     since we are considering black & white image problems, 
-    we start by encouraging selection of white pixels.
+    we start by encouraging selection of fore-ground pixels.
     """
-    # Make dense version of q to match the image shape
-    q_image = jnp.zeros_like(image.flatten())
-    q_image = q_image.at[node_ids.T].set(q.T)
-    q_image = q_image.reshape(*image.shape)
-    # Normalize
-    image = jnp.clip(image - 1, a_min=0)  # get rid of the shift due to the -1 node
-    image_sum = image.sum(keepdims=True)
-
-    image_norm = image / image_sum
-    q_image_norm = q_image / image_sum
-
-    loss = ((q_image_norm - image_norm) ** 2).mean()
-    # loss = (-q_image_norm * image_norm).sum() # + q_image_norm * (1 - image_norm)
+    # Extract values of the image at the extracted pixels
+    # Normalize image
+    flat_image = image.flatten()
+    # Normalize so that each pixel is between 0 and 1.
+    max_flat_image = flat_image.max(keepdims=True)
+    normalized_flat_image = jnp.clip(flat_image -1, a_min=0) / max_flat_image
+    # q is already in [0, 1], so no need to normalize.
+    # q should be 0 where image is 0
+    extracted_image = jnp.take(normalized_flat_image, node_ids, fill_value=0.)
+    loss = ((q - extracted_image) ** 2).sum()
     return loss
 
   def pred_fun(self, logits):
@@ -202,10 +201,13 @@ class ClassificationPipeline(nn.Module):
     # Extract subgraph and associated features
     cfg = self.config
     logits, (q, dense_submat, node_ids, dense_q) = self(graphs, start_node_ids)
+    # Debug why gradients are 0 on the curiosity loss
+
     del dense_submat
     preds = self.pred_fun(logits)
-    # TODO: Add curiosity loss here.
     label_loss = self.loss_fun(logits, labels)
     curiosity_loss = self.curiosity_loss_fun(graphs.image, dense_q, node_ids) if cfg.curiosity_weight > 0. else 0.
-    loss_vals = label_loss + cfg.curiosity_weight * curiosity_loss
-    return loss_vals, (preds, logits, q, label_loss, curiosity_loss)
+    # Add entropy term to deconcentrate the weights
+    entropy_loss = -jax.scipy.special.entr(dense_q).mean()
+    loss_vals = cfg.label_weight * label_loss + cfg.curiosity_weight * curiosity_loss + cfg.entropy_weight * entropy_loss
+    return loss_vals, (preds, logits, q, label_loss, curiosity_loss, entropy_loss)

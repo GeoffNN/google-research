@@ -18,8 +18,13 @@
 Trains an agent and graph models on MNIST.
 """
 
+from google.cloud.aiplatform.training_utils import cloud_profiler
+
+import json
+from datetime import datetime
 import functools
 import os
+import time
 import warnings
 
 from absl import app
@@ -36,6 +41,8 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 import tqdm
+
+import shortuuid
 
 from jaxsel._src import agents
 from jaxsel._src import graph_models
@@ -63,8 +70,8 @@ flags.DEFINE_integer('plot_freq', 100,
                      'Log image plots for a random train examples and first val points for each class every plot_freq iterations.')
 flags.DEFINE_integer('n_epochs', 5, 'Number of training epochs.')
 flags.DEFINE_float(
-    'alpha', .1,
-    'Probability of teleporting back to initial node distribution.')
+    'alpha', 1e-3,
+    'Probability of teleporting back to initial node distribution. Make smaller to increase initial subgraph radius.')
 flags.DEFINE_float('rho', 0., 'L1 regularization in sparse PageRank.')
 flags.DEFINE_integer(
     'patch_size',
@@ -92,8 +99,8 @@ flags.DEFINE_float(
     'the jvp of the subgraph selection layer.')
 
 flags.DEFINE_integer('num_heads', 4, 'Number of heads for attention mechanism.')
-flags.DEFINE_integer('qkv_dim', 128, 'Attention mechanism dimension.')
-flags.DEFINE_integer('mlp_dim', 16,
+flags.DEFINE_integer('qkv_dim', 32, 'Attention mechanism dimension.')
+flags.DEFINE_integer('mlp_dim', 32,
                      'Dense layer dimension in transformer block.')
 flags.DEFINE_integer('agent_hidden_dim', 16,
                      'Middle layer dimension for agent model.')
@@ -116,6 +123,12 @@ flags.DEFINE_bool(
     'The supernode is connected to all nodes.')
 flags.DEFINE_float(
   'curiosity_weight', 0., 'Weight for curiosity driving loss function.'
+)
+flags.DEFINE_float(
+  'entropy_weight', 0., 'Weight for entropy loss function.'
+)
+flags.DEFINE_float(
+  'label_weight', 1., 'Weight for supervised loss function.'
 )
 flags.DEFINE_integer('test_log_freq', 1, 'Log test statistics every n epochs.')
 flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
@@ -146,6 +159,8 @@ def training_loop(
     agent_hidden_dim,
     n_encoder_layers,
     curiosity_weight=0.,
+    entropy_weight=0.,
+    label_weight=1.,
     supernode=False,
     overfit=False,
     debug=False,
@@ -184,6 +199,7 @@ def training_loop(
       model.
     n_encoder_layers: Depth of the graph encoder model.
     curiosity_weight: Weight for curiosity loss.
+    label_weight: Weight for supervised loss.
     supernode: whether to add a supernode to the extracted subgraph. The
       supernode is connected to all ndoes in the subgraph, and is an attempt to
       get by range issues on the subgraph.
@@ -204,7 +220,7 @@ def training_loop(
      num_classes) = data_utils.load_mnist(batch_size)
     val_dataset = None
     make_graph = data_utils.make_graph_mnist
-    bins = jnp.array([0., .3, 1.])
+    bins = jnp.linspace(0., 1., 5)
 
   elif dataset == 'lra_pathfinder':
     (train_dataset, val_dataset, test_dataset, image_shape,
@@ -216,11 +232,15 @@ def training_loop(
     test_dataset = test_dataset.cache()
     make_graph = data_utils.make_graph_pathfinder
     # TODO(gnegiar): take bins as argument ?
-    bins = jnp.linspace(0., 1., 50)
-
+    bins = jnp.linspace(0., 1., 20)
+  
   else:
     raise ValueError(
         f"dataset must be in ['mnist', 'lra_pathfinder']. Got {dataset}.")
+  
+  # Vmap the graph making utility function
+  make_graphs = jax.vmap(make_graph, (0, None, None))
+
 
   # TODO(gnegiar): Add gradient clipping
   if optimizer == 'adam':
@@ -263,24 +283,30 @@ def training_loop(
       hidden_dim=graph_model_hidden_dim,
       num_classes=num_classes)
 
-  train_config = pipeline.ClassificationPipelineConfig(extractor_config,
-                                                       graph_classifier_config,
-                                                       curiosity_weight=curiosity_weight)
+  train_config = pipeline.ClassificationPipelineConfig(
+    extractor_config,
+    graph_classifier_config,
+    curiosity_weight=curiosity_weight,
+    entropy_weight=entropy_weight,
+    label_weight=label_weight)
 
   eval_config = pipeline.ClassificationPipelineConfig(
-      extractor_config, graph_classifier_config.replace(deterministic=True))
+      extractor_config, graph_classifier_config.replace(deterministic=True),
+      curiosity_weight=curiosity_weight,
+      entropy_weight=entropy_weight,
+      label_weight=label_weight)
 
   # Define loss over the full model.
   def forward(params, graphs, start_node_ids, labels, config, rng=None):
     model = pipeline.ClassificationPipeline(config)
-    loss_vals, (preds, logits, q, label_loss, curiosity_loss) = model.apply(
+    loss_vals, (preds, logits, q, label_loss, curiosity_loss, entropy_loss) = model.apply(
         params,
         graphs,
         start_node_ids,
         labels,
         rngs={'dropout': rng} if rng is not None else None,
         method=model.compute_loss)
-    return loss_vals.mean(0), (preds, logits, q, label_loss.mean(0), curiosity_loss.mean(0))
+    return loss_vals.mean(0), (preds, logits, q, label_loss.mean(0), curiosity_loss.mean(0), entropy_loss.mean(0))
 
   test_forward = jax.jit(functools.partial(forward, config=eval_config))
 
@@ -293,10 +319,8 @@ def training_loop(
   test_representatives = train_utils.get_first_class_representatives(
       test_dataset, num_classes)
   test_rep_images, _ = zip(*test_representatives)
-  test_representatives_graphs = tree_utils.tree_stack([
-      make_graph(image, patch_size, bins)
-      for image, label in test_representatives
-  ])
+  test_representatives_graphs = make_graphs(jnp.stack(test_rep_images), patch_size, bins)
+      
   rep_labels = np.arange(num_classes)
 
   rng_params, rng_dropout, rng = jax.random.split(rng, 3)
@@ -333,42 +357,64 @@ def training_loop(
   # For early stopping
   best_loss = jnp.inf
   best_test_accuracy = 0
+  losses = []
+  steps = []
+  logged_steps = []
+  agent_grad_norms = []
+  graph_grad_norms = []
 
   print('Start training!')
+  
+  try:
+    cloud_profiler.init()
+  except Exception:
+    pass
+
   # TODO(gnegiar): Add description with loss to tqdm
-  for epoch in tqdm.tqdm(range(n_epochs)):
+
+  tfds.display_progress_bar(True)
+  print("Starting training.")
+  for epoch in range(n_epochs):
     for batch in tfds.as_numpy(train_dataset):
       data, labels = batch
       # TODO(gnegiar): build the graphs once before hand, in the dataloading
       # Make graphs from the batch of images
-      graphs = tree_utils.tree_stack(
-          [make_graph(image, patch_size, bins) for image in data])
+
+      # t0 = time.time()
+      graphs = make_graphs(data, patch_size, bins)
+      # graphs.image.block_until_ready()
+      # t1 = time.time()
+      # print(f"Dataloading + building graph: \t{t1 - t0:.3f}s")
 
       # Use the results inside a JAX implicit differentiation construction.
       rng_it, rng = jax.random.split(rng)
 
-      (loss, (preds, logits, q, label_loss, curiosity_loss)), model_grad = value_grad_loss_fn(
+      # jax.profiler.start_trace(tensorboard_logdir)
+      t0 = time.time()
+      (loss, (preds, logits, q, label_loss, curiosity_loss, entropy_loss)), model_grad = value_grad_loss_fn(
           model_state,
           graphs,
           graphs.sample_start_node_id(),
           labels,
           rng=rng_it,
       )
-      print(loss)
+      loss.block_until_ready()
+      t1 = time.time()
+      # jax.profiler.stop_trace()
+      print(f"Forward + backward pass: \t{t1 - t0:.3f}s")
+      # print(loss)
       del logits
 
       batch_accuracy = jnp.mean((preds == labels).astype(float))
 
-      if np.isnan(loss):
-        warnings.warn('Train loss was NaN.', RuntimeWarning)
-
-      elif loss < best_loss:
+      if loss < best_loss:
         best_loss = loss
 
       # Log the loss
       if tensorboard_logdir is not None:
         if step % log_freq == 0:
-
+          if np.isnan(loss):
+            warnings.warn('Train loss was NaN.', RuntimeWarning)
           # TODO(gnegiar): Separate out the gradients for both models
           agent_model_grad_norm = tree_utils.global_norm(
               model_grad['params']['extractor'])
@@ -379,6 +425,7 @@ def training_loop(
             tf.summary.scalar('loss', loss, step=step)
             tf.summary.scalar('loss_label', label_loss, step=step)
             tf.summary.scalar('loss_curiosity', curiosity_loss, step=step)
+            tf.summary.scalar('loss_entropy', entropy_loss, step=step)
 
             tf.summary.scalar('accuracy', batch_accuracy, step=step)
             tf.summary.scalar(
@@ -403,10 +450,15 @@ def training_loop(
             tf.summary.histogram('Node weights', q.data[0], step=step)
 
             # Plot subgraph on first test datapoint of each class
-            loss_rep, (preds_rep, logits_rep, q_rep, label_loss, curiosity_loss) = test_forward(
+            t0 = time.time()
+            loss_rep, (preds_rep, logits_rep, q_rep, label_loss, curiosity_loss, entropy_loss) = test_forward(
                 model_state, test_representatives_graphs,
                 test_representatives_graphs.sample_start_node_id(), rep_labels,
                 )
+            # loss_rep.block_until_ready()
+            # t1 = time.time()
+            # print(f"Test forward: {t1 - t0:.3f}")
+
             del loss_rep, logits_rep
             tf.summary.image(
                 'Class representatives',
@@ -420,11 +472,39 @@ def training_loop(
                         num_classes)),
                 step=step)
 
+      else:
+        losses.append(loss)
+        steps.append(step)
+        if step % log_freq == 0:
+          logged_steps.append(step)
+          import matplotlib.pyplot as plt
+          
+          agent_model_grad_norm = tree_utils.global_norm(
+              model_grad['params']['extractor'])
+          graph_model_grad_norm = tree_utils.global_norm(
+              model_grad['params']['graph_classifier'])
 
+          agent_grad_norms.append(agent_model_grad_norm)
+          graph_grad_norms.append(graph_model_grad_norm)
+
+          plt.plot(steps, losses, label='Train loss')
+          plt.legend()
+          plt.savefig("figures/Train losses.png")
+          plt.close()
+
+          plt.plot(logged_steps, agent_grad_norms, label='Agent grad norm')
+          plt.legend()
+          plt.savefig("figures/Agent grad norms")
+          plt.close()
+
+          plt.plot(logged_steps, graph_grad_norms, label='Graph model grad norm')
+          plt.legend()
+          plt.savefig("figures/Graph model grad norms")
+          plt.close()
 
       pipeline_update, opt_state = optimizer.update(model_grad, opt_state)
-
       model_state = optax.apply_updates(model_state, pipeline_update)
+
       if debug:
         print(f'Loss on first train batch {loss}')
         break
@@ -434,11 +514,10 @@ def training_loop(
       for batch_test in tfds.as_numpy(test_dataset):
         data_test, labels_test = batch_test
         # TODO(gnegiar): build the graphs once before hand, in the dataloading
-        graphs_test = tree_utils.tree_stack(
-            [make_graph(image, patch_size, bins) for image in data_test])
+        graphs_test = make_graphs(data_test, patch_size, bins)
 
         loss_test, (preds, logits,
-                    q, label_loss_test, curiosity_loss_test) = test_forward(model_state, graphs_test,
+                    q, label_loss_test, curiosity_loss_test, entropy_loss_test) = test_forward(model_state, graphs_test,
                                       graphs_test.sample_start_node_id(),
                                       labels_test)
 
@@ -454,6 +533,7 @@ def training_loop(
           tf.summary.scalar('loss', loss_test, step=step)
           tf.summary.scalar('loss_label', label_loss_test, step=step)
           tf.summary.scalar('loss_curiosity', curiosity_loss_test, step=step)
+          tf.summary.scalar('loss_entropy', entropy_loss_test, step=step)
 
       # Reset metric for next epoch.
       test_accuracy.reset_state()
@@ -461,6 +541,7 @@ def training_loop(
       if debug:
         print(f'Loss on first validation batch {loss_test}')
         break
+      
 
   print('Finished training!')
 
@@ -473,6 +554,22 @@ def main(argv):
   # it unavailable to JAX.
   tf.config.experimental.set_visible_devices([], 'GPU')
 
+  tb_logdir = FLAGS.tensorboard_logdir
+
+  if tb_logdir is None:
+    # This is a local experiment
+    tb_logdir = os.environ.get('LOGDIR', None)
+    dt = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    experiment_id = f'{dt}_{shortuuid.uuid()}'
+    tb_logdir = os.path.join(tb_logdir, FLAGS.dataset, experiment_id, 'tb_logs')
+    
+
+
+  # Log training flags
+  flags_dict = FLAGS.flag_values_dict()
+  os.makedirs(tb_logdir, exist_ok=True)
+  with open(os.path.join(tb_logdir, 'args.log'), 'w') as f:
+    json.dump(flags_dict, f)
 
   training_loop(
       optimizer=FLAGS.optimizer,
@@ -495,8 +592,10 @@ def main(argv):
       n_encoder_layers=FLAGS.n_encoder_layers,
       n_epochs=FLAGS.n_epochs,
       ridge=FLAGS.ridge_backward,
-      tensorboard_logdir=FLAGS.tensorboard_logdir,
+      tensorboard_logdir=tb_logdir,
       curiosity_weight=FLAGS.curiosity_weight,
+      entropy_weight=FLAGS.entropy_weight,
+      label_weight=FLAGS.label_weight,
       supernode=FLAGS.supernode,
       overfit=FLAGS.overfit,
       log_freq=FLAGS.log_freq,

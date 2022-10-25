@@ -329,8 +329,10 @@ class TransformerClassifier(nn.Module):
              adjacency_mat, qstar):
     node_feature_embeddings, node_position_embeddings = self.embedder(
         node_features, node_ids)
-    return self.encoder(node_feature_embeddings, node_position_embeddings,
+    encoded = self.encoder(node_feature_embeddings, node_position_embeddings,
                         adjacency_mat, qstar)
+    print(encoded.shape)
+    return encoded
 
   def decode(self, encoded_graph):
     graph_embedding = encoded_graph[-1]
@@ -342,6 +344,88 @@ class TransformerClassifier(nn.Module):
     adjacency_mat = adjacency_mat.squeeze(-1)
     encoded_graph = self.encode(node_features, node_ids, adjacency_mat, qstar)
     # The encoder encodes the whole graph in a special token in last position
+    return self.decode(encoded_graph)
+
+
+# --------------------------------------------
+# ------------  Simple, fast models ----------
+# --------------------------------------------
+
+
+class SimpleGraphEncoder(nn.Module):
+  """Encodes a bag of nodes into a subgraph representation.
+
+  Adapted from https://github.com/google/flax/blob/main/examples/wmt/models.py
+  """
+  config: TransformerConfig
+
+  @nn.compact
+  def __call__(self, node_feature_embeddings,
+               node_position_embeddings, adjacency_mat,
+               qstar):
+    """A simple graph encoder.
+
+    Args:
+      node_feature_embeddings: Embeddings representing nodes.
+      node_position_embeddings: Embeddings representing node positions.
+      adjacency_mat: Adjacency matrix over the nodes. Not used for now.
+      qstar: float tensor of shape (num_of_nodes,) The optimal q weighting over
+        the nodes of the graph, from the subgraph selection module.
+
+    Returns:
+      encoded: Encoded nodes, with extra Graph node at the end.
+    """
+    cfg = self.config
+    x = node_feature_embeddings + node_position_embeddings
+
+    # Add average weight to graph node for scale
+    qstar = jnp.append(qstar, jnp.mean(qstar))
+
+    # Multiply embeddings by node weights. => learn the agent model.
+    x = x * qstar[Ellipsis, None]
+    x = x.astype(cfg.dtype)
+
+    for i in range(cfg.num_layers):
+      x = nn.Dense(cfg.mlp_dim)(x)
+      if i < cfg.num_layers - 1:
+        x = nn.relu(x)
+    return x
+
+
+
+# TODO: Write simple, fast, graph encoder, perhaps based on GNNs.
+class SimpleGraphClassifier(nn.Module):
+  """A transformer based graph classifier.
+
+  Attributes:
+    config: Configuration for the model.
+  """
+  config: TransformerConfig
+
+  def setup(self):
+    cfg = self.config
+    self.embedder = SubgraphEmbedding(cfg)
+    self.encoder = SimpleGraphEncoder(cfg)
+    self.classifier = ClassificationHead(cfg)
+
+  def encode(self, node_features, node_ids,
+             adjacency_mat, qstar):
+    node_feature_embeddings, node_position_embeddings = self.embedder(
+        node_features, node_ids)
+    encoded = self.encoder(node_feature_embeddings, node_position_embeddings,
+                        adjacency_mat, qstar)
+    return encoded[jnp.newaxis]
+
+  def decode(self, encoded_graph):
+    # The encoder encodes the whole graph in a special token in last position
+    graph_embedding = encoded_graph.flatten()
+    logits = self.classifier(graph_embedding)
+    return logits
+
+  def __call__(self, node_features, node_ids,
+               adjacency_mat, qstar):
+    adjacency_mat = adjacency_mat.squeeze(-1)
+    encoded_graph = self.encode(node_features, node_ids, adjacency_mat, qstar)
     return self.decode(encoded_graph)
 
 

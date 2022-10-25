@@ -24,12 +24,14 @@ from jax import numpy as jnp
 PyTree = Any  # typing for humans
 
 
+@jax.jit
 def global_norm(tree):
   """Takes a PyTree and returns its global L2 norm."""
-  leaf_norms2 = jax.tree_map(lambda x: jnp.linalg.norm(x)**2, tree)
+  leaf_norms2 = jax.tree_util.tree_map(lambda x: jnp.linalg.norm(x)**2, tree)
   return jnp.sqrt(jax.tree_util.tree_reduce(lambda x, y: x + y, leaf_norms2, 0))
 
 
+@jax.jit
 def tree_stack(trees):
   """Takes a list of trees and stacks every corresponding leaf.
 
@@ -48,7 +50,7 @@ def tree_stack(trees):
   leaves_list = []
   treedef_list = []
   for tree in trees:
-    leaves, treedef = jax.tree_flatten(tree)
+    leaves, treedef = jax.tree_util.tree_flatten(tree)
     leaves_list.append(leaves)
     treedef_list.append(treedef)
 

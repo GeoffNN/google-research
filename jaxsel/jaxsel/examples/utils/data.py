@@ -18,6 +18,7 @@
 import functools
 from typing import Tuple, Sequence
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from scipy import ndimage as ndi
@@ -46,21 +47,21 @@ def load_mnist(
   Returns:
     train_dataset, test_dataset, image_shape, num_classes
   """
-  train_dataset = tfds.load('mnist', split='train', as_supervised=True)
-  test_dataset = tfds.load('mnist', split='test', as_supervised=True)
+  train_dataset, test_dataset = tfds.load('mnist', split=['train', 'test'], shuffle_files=True, as_supervised=True)
 
   train_dataset = train_dataset.map(
-      normalize_img, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+      normalize_img, num_parallel_calls=tf.data.AUTOTUNE)
   test_dataset = test_dataset.map(
-      normalize_img, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-  train_dataset.cache()
-  test_dataset.cache()
+      normalize_img, num_parallel_calls=tf.data.AUTOTUNE)
+  train_dataset = train_dataset.cache()
 
   train_dataset = train_dataset.shuffle(
       60_000, seed=0, reshuffle_each_iteration=True)
   train_dataset = train_dataset.batch(batch_size, drop_remainder=True)
+  train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
 
   test_dataset = test_dataset.batch(batch_size, drop_remainder=True)
+  test_dataset = test_dataset.cache()
   return train_dataset, test_dataset, (28, 28), 10
 
 
@@ -105,18 +106,19 @@ def load_pathfinder(
     return tf.cast(datapoint['inputs'], tf.float32), datapoint['targets']
 
   train_dataset = train_dataset.map(
-      tupleize, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+      tupleize, num_parallel_calls=tf.data.AUTOTUNE)
   val_dataset = val_dataset.map(
-      tupleize, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+      tupleize, num_parallel_calls=tf.data.AUTOTUNE)
   test_dataset = test_dataset.map(
-      tupleize, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+      tupleize, num_parallel_calls=tf.data.AUTOTUNE)
 
   return train_dataset, val_dataset, test_dataset, image_shape, num_classes
 
 
 # TODO(gnegiar): Map this on the dataset, and cache it.
+@functools.partial(jax.jit, static_argnums=(1,))
 def make_graph_mnist(
-    image, patch_size, bins = (0., .3, 1.)
+    image, patch_size, bins = jnp.array([0., .3, 1.])
 ):
   """Makes a graph object to hold an MNIST sample.
 
@@ -139,6 +141,7 @@ def make_graph_mnist(
 
 
 # TODO(gnegiar): Map this on the dataset, and cache it.
+@functools.partial(jax.jit, static_argnums=(1,))
 def make_graph_pathfinder(
     image,
     patch_size,
@@ -157,8 +160,6 @@ def make_graph_pathfinder(
   """
 
   # TODO(gnegiar): Allow multiple start nodes.
-  # The threshold value .3 was selected to keep information
-  # while not introducing noise
   def _get_start_pixel_fn(
       image, thresh = .5 * len(bins)):
     """Detects a probable start point in a Pathfinder image example."""
