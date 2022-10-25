@@ -20,12 +20,15 @@ from lra.lra_benchmarks.data import pathfinder
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-_PATHFINDER_TFDS_PATH = os.path.join("/gcs", "jaxsel", "data", "tfds")
+# _PATHFINDER_TFDS_PATH = os.path.join("/gcs", "jaxsel", "data", "tfds")
+# _PATHFINDER_TFDS_PATH = os.path.join("/scratch", "gnegiar","jaxsel_data", "data", "tfds")
 
-# print(f"Dirs in {_PATHFINDER_TFDS_PATH}", os.listdir(_PATHFINDER_TFDS_PATH))
+# Get from environmental variables
+_PATHFINDER_TFDS_PATH = os.environ.get('PATHFINDER_PATH')
+
+print(f"Dirs in {_PATHFINDER_TFDS_PATH}", os.listdir(_PATHFINDER_TFDS_PATH))
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
-
 
 def load(n_devices=1,
          batch_size=256,
