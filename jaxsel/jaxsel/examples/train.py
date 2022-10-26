@@ -91,6 +91,8 @@ flags.DEFINE_integer('max_subgraph_size', 100,
                      'Maximum allowed size for the extracted subgraph.')
 flags.DEFINE_integer('num_steps_extractor', 25,
                      'Number of ISTA steps for extractor forward.')
+flags.DEFINE_float('extractor_tol', 1e-6,
+                     'Tolerance for ISTA solver in the extractor forward.')
 flags.DEFINE_bool('debug', False,
                   'If True, we only train over 1 batch before testing.')
 flags.DEFINE_float(
@@ -156,6 +158,7 @@ def training_loop(
     ridge,
     tensorboard_logdir,
     num_steps_extractor,
+    extractor_tol,
     agent_hidden_dim,
     n_encoder_layers,
     curiosity_weight=0.,
@@ -269,8 +272,8 @@ def training_loop(
                                     agent_hidden_dim)
 
   extractor_config = subgraph_extractors.ExtractorConfig(
-      max_graph_size, max_subgraph_size, rho, alpha, num_steps_extractor, ridge,
-      agent_config)
+      max_graph_size, max_subgraph_size, rho, alpha, num_steps_extractor, extractor_tol,
+      ridge, agent_config)
 
   graph_classifier_config = graph_models.TransformerConfig(
       graph_parameters,
@@ -586,6 +589,7 @@ def main(argv):
       alpha=FLAGS.alpha,
       rho=FLAGS.rho,
       num_steps_extractor=FLAGS.num_steps_extractor,
+      extractor_tol=FLAGS.extractor_tol,
       max_subgraph_size=FLAGS.max_subgraph_size,
       max_graph_size=FLAGS.max_graph_size,
       agent_hidden_dim=FLAGS.agent_hidden_dim,

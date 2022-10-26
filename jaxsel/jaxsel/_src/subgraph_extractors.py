@@ -55,6 +55,7 @@ class ExtractorConfig:
   rho: float
   alpha: float
   num_steps: int
+  tolerance: float
   ridge: float
   agent_config: agents.AgentConfig
 
@@ -100,13 +101,11 @@ class SparseISTAExtractor(nn.Module):
         (_softthresh(x.data, self.config.alpha, self.config.rho), x.indices),
         shape=x.shape)
 
-  def _ista_step(self, q, adjacency_matrix,
-                 s):
+  def _ista_step(self, q, adjacency_matrix, s):
     q_minus_grad = self._q_minus_grad(q, adjacency_matrix, s)
     return self._sparse_softthresh(q_minus_grad)
 
-  def _error(self, q, dense_adjacency_matrix,
-             s):
+  def _error(self, q, dense_adjacency_matrix, s):
     return (_dense_fixed_point(q, dense_adjacency_matrix, s, self.config.alpha,
                                self.config.rho)**2).sum()
 
@@ -149,28 +148,33 @@ class SparseISTAExtractor(nn.Module):
     """Extracts a dense subvector from a sparse vector at given indices."""
     return jax.vmap(_subscript, (None, 0))(q, indices)
 
-  def _ista_solve(self, s,
-                  graph):
+  def _ista_solve(self, s, graph):
     """Runs the ISTA solver."""
 
     def body_fun(mdl, carry):
-      step, q = carry
+      step, q, q_prev = carry
+      del q_prev
       adjacency_matrix = mdl.agent.fill_sparse_adjacency_matrix(q, graph)
-      q = self._ista_step(q, adjacency_matrix, s)
-      return step + 1, q
+      q_next = self._ista_step(q, adjacency_matrix, s)
+      return step + 1, q_next, q
 
     def cond_fun(mdl, c):
       del mdl
-      step, q = c
-      del q
-      return step < self.config.num_steps
+      step, q, q_prev = c
+      err_vec = q - q_prev
+      sq_err_vec = jsparse.BCOO((err_vec.data ** 2, err_vec.indices), shape=err_vec.shape)
+      sq_error = sq_err_vec.sum()
+      return jnp.logical_and(step < self.config.num_steps, sq_error > self.config.tolerance ** 2)
 
+    # Dummy variable which won't trigger the cond_fun
+    s_prev = jsparse.BCOO((s.data + 1. + self.config.tolerance, s.indices), shape=s.shape)
     # Make sure the agent is initialized
     if self.is_mutable_collection("params"):
-      _, q = body_fun(self, (0, s))
+      # Initialize q_prev with 
+      _, q, _ = body_fun(self, (0, s, s_prev))
     else:
       # Things are initialized
-      _, q = nn.while_loop(cond_fun, body_fun, self, (0, s))
+      _, q, _ = nn.while_loop(cond_fun, body_fun, self, (0, s, s_prev))
     return q
 
   def __call__(
@@ -195,6 +199,7 @@ class SparseISTAExtractor(nn.Module):
     # TODO(gnegiar): Do we need to add a stop_gradient here
     q = self._ista_solve(s, graph)
     q = jax.lax.stop_gradient(q)
+
     # TODO(gnegiar): Find a way to avoid re-filling adjacency_matrix
     # For now, this allows to propagate gradients back to the `agent` model
     adjacency_matrix = self.agent.fill_sparse_adjacency_matrix(q, graph)
@@ -236,6 +241,8 @@ class SparseISTAExtractor(nn.Module):
         initial_guess=dense_q,
         solve=lambda _, q: dense_q,
         tangent_solve=_tangent_solve)
+
+    q_star = dense_q
 
     node_features = jax.vmap(graph.node_features)(q.indices.flatten())
 

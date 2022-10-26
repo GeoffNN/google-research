@@ -417,7 +417,7 @@ class SimpleGraphClassifier(nn.Module):
     return encoded[jnp.newaxis]
 
   def decode(self, encoded_graph):
-    # The encoder encodes the whole graph in a special token in last position
+    # The encoder encodes the whole graph
     graph_embedding = encoded_graph.flatten()
     logits = self.classifier(graph_embedding)
     return logits
