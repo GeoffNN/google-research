@@ -128,6 +128,15 @@ class ClassificationPipeline(nn.Module):
     loss = ((q - extracted_image) ** 2).sum()
     return loss
 
+  def entropy_loss_fun(self, q):
+    """Computes entropy loss."""
+    # Normalize q so it's a probability, and compute entropy
+    entropy = jax.scipy.special.entr(q / sum(q)).sum()
+    max_entropy = -jnp.log(1 / q.shape[0])  # Uniform weights on the support of q
+    entropy_loss = max_entropy - entropy
+    return entropy_loss
+
+
   def pred_fun(self, logits):
     """Computes the model's predicted class."""
     num_classes = self.config.graph_classifier_config.num_classes
@@ -208,6 +217,6 @@ class ClassificationPipeline(nn.Module):
     label_loss = self.loss_fun(logits, labels)
     curiosity_loss = self.curiosity_loss_fun(graphs.image, dense_q, node_ids) if cfg.curiosity_weight > 0. else 0.
     # Add entropy term to deconcentrate the weights
-    entropy_loss = -jax.scipy.special.entr(dense_q).mean()
+    entropy_loss = self.entropy_loss_fun(dense_q)
     loss_vals = cfg.label_weight * label_loss + cfg.curiosity_weight * curiosity_loss + cfg.entropy_weight * entropy_loss
     return loss_vals, (preds, logits, q, label_loss, curiosity_loss, entropy_loss)
