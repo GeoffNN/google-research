@@ -211,12 +211,10 @@ class ClassificationPipeline(nn.Module):
     cfg = self.config
     logits, (q, dense_submat, node_ids, dense_q) = self(graphs, start_node_ids)
     # Debug why gradients are 0 on the curiosity loss
-
-    del dense_submat
     preds = self.pred_fun(logits)
     label_loss = self.loss_fun(logits, labels)
     curiosity_loss = self.curiosity_loss_fun(graphs.image, dense_q, node_ids) if cfg.curiosity_weight > 0. else 0.
     # Add entropy term to deconcentrate the weights
     entropy_loss = self.entropy_loss_fun(dense_q)
     loss_vals = cfg.label_weight * label_loss + cfg.curiosity_weight * curiosity_loss + cfg.entropy_weight * entropy_loss
-    return loss_vals, (preds, logits, q, label_loss, curiosity_loss, entropy_loss)
+    return loss_vals, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss)

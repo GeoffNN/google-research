@@ -57,6 +57,7 @@ class ExtractorConfig:
   num_steps: int
   tolerance: float
   ridge: float
+  learn_agent: bool
   agent_config: agents.AgentConfig
 
 
@@ -236,13 +237,14 @@ class SparseISTAExtractor(nn.Module):
         jvp = jnp.linalg.solve(linearization, y)
       return jvp
 
-    q_star = jax.lax.custom_root(
-        f=_fixed_point,
-        initial_guess=dense_q,
-        solve=lambda _, q: dense_q,
-        tangent_solve=_tangent_solve)
-
-    q_star = dense_q
+    if self.config.learn_agent:
+      q_star = jax.lax.custom_root(
+          f=_fixed_point,
+          initial_guess=dense_q,
+          solve=lambda _, q: dense_q,
+          tangent_solve=_tangent_solve)
+    else:
+      q_star = dense_q
 
     node_features = jax.vmap(graph.node_features)(q.indices.flatten())
 

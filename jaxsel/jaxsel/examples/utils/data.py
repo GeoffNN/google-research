@@ -118,7 +118,7 @@ def load_pathfinder(
 # TODO(gnegiar): Map this on the dataset, and cache it.
 @functools.partial(jax.jit, static_argnums=(1,))
 def make_graph_mnist(
-    image, patch_size, bins = jnp.array([0., .3, 1.])
+    image, patch_size, bins = np.array([0., .3, 1.])
 ):
   """Makes a graph object to hold an MNIST sample.
 
@@ -141,7 +141,6 @@ def make_graph_mnist(
 
 
 # TODO(gnegiar): Map this on the dataset, and cache it.
-@functools.partial(jax.jit, static_argnums=(1,))
 def make_graph_pathfinder(
     image,
     patch_size,
@@ -163,7 +162,7 @@ def make_graph_pathfinder(
   def _get_start_pixel_fn(
       image, thresh = .5 * len(bins)):
     """Detects a probable start point in a Pathfinder image example."""
-    thresh_image = np.where(image > thresh, 1, 0)
+    thresh_image = jnp.where(image > thresh, 1, 0)
     distance = ndi.distance_transform_edt(thresh_image)
     idx = distance.argmax()
     coords = np.unravel_index(idx, thresh_image.shape)

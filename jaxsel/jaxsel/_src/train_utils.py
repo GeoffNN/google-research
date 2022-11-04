@@ -27,6 +27,8 @@ import jax.numpy as jnp
 
 from matplotlib import pyplot as plt
 import matplotlib.patches as plot_patches
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 
 import tensorflow as tf
 
@@ -151,6 +153,19 @@ def plot_subgraph_classes(imgs, qs, labels,
     ax.axis('off')
   plt.tight_layout()
   return fig
+
+def plot_adj_mats(adj_mat_representatives, labels, num_classes):
+    fig, axs = plt.subplots(2, num_classes // 2, figsize=(num_classes, 4))
+
+    max_val = adj_mat_representatives.max()
+    for ax, adj_mat, label in zip(axs.flatten(), adj_mat_representatives, labels):
+      im = ax.imshow(adj_mat, cmap='RdBu', vmin=0., vmax=max_val)
+      ax.set_title(f"Pred: {label}")
+      divider = make_axes_locatable(ax)
+      cax = divider.append_axes('right', size='5%', pad=0.05)
+      plt.colorbar(im, cax=cax, orientation='vertical')
+    plt.tight_layout()
+    return fig
 
 
 def plot_to_image(figure):

@@ -99,6 +99,7 @@ flags.DEFINE_float(
     'ridge_backward', 1e-6,
     'L2 regularization for the linear system used to compute'
     'the jvp of the subgraph selection layer.')
+flags.DEFINE_bool('learn_agent', True, 'Whether to propagate gradients to the agent model. True by default. False for ablation.')
 
 flags.DEFINE_integer('num_heads', 4, 'Number of heads for attention mechanism.')
 flags.DEFINE_integer('qkv_dim', 32, 'Attention mechanism dimension.')
@@ -159,6 +160,7 @@ def training_loop(
     tensorboard_logdir,
     num_steps_extractor,
     extractor_tol,
+    learn_agent,
     agent_hidden_dim,
     n_encoder_layers,
     curiosity_weight=0.,
@@ -223,7 +225,9 @@ def training_loop(
      num_classes) = data_utils.load_mnist(batch_size)
     val_dataset = None
     make_graph = data_utils.make_graph_mnist
-    bins = jnp.linspace(0., 1., 5)
+    bins = np.linspace(0., 1., 5)
+    # Vmap the graph making utility function
+    make_graphs = jax.vmap(make_graph, (0, None, None))
 
   elif dataset == 'lra_pathfinder':
     (train_dataset, val_dataset, test_dataset, image_shape,
@@ -234,15 +238,14 @@ def training_loop(
     test_dataset = val_dataset  # Drop the test set, validate on val_ds
     test_dataset = test_dataset.cache()
     make_graph = data_utils.make_graph_pathfinder
+    # Can't vmap make_graph_pathfinder due to using ndi.
+    make_graphs = lambda images, patch_size, bins: tree_utils.tree_stack([make_graph(image, patch_size, bins) for image in images])
     # TODO(gnegiar): take bins as argument ?
-    bins = jnp.linspace(0., 1., 20)
+    bins = np.linspace(0., 1., 10)
   
   else:
     raise ValueError(
         f"dataset must be in ['mnist', 'lra_pathfinder']. Got {dataset}.")
-  
-  # Vmap the graph making utility function
-  make_graphs = jax.vmap(make_graph, (0, None, None))
 
 
   # TODO(gnegiar): Add gradient clipping
@@ -273,7 +276,7 @@ def training_loop(
 
   extractor_config = subgraph_extractors.ExtractorConfig(
       max_graph_size, max_subgraph_size, rho, alpha, num_steps_extractor, extractor_tol,
-      ridge, agent_config)
+      ridge, learn_agent, agent_config)
 
   graph_classifier_config = graph_models.TransformerConfig(
       graph_parameters,
@@ -302,14 +305,14 @@ def training_loop(
   # Define loss over the full model.
   def forward(params, graphs, start_node_ids, labels, config, rng=None):
     model = pipeline.ClassificationPipeline(config)
-    loss_vals, (preds, logits, q, label_loss, curiosity_loss, entropy_loss) = model.apply(
+    loss_vals, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss) = model.apply(
         params,
         graphs,
         start_node_ids,
         labels,
         rngs={'dropout': rng} if rng is not None else None,
         method=model.compute_loss)
-    return loss_vals.mean(0), (preds, logits, q, label_loss.mean(0), curiosity_loss.mean(0), entropy_loss.mean(0))
+    return loss_vals.mean(0), (preds, logits, q, dense_submat, label_loss.mean(0), curiosity_loss.mean(0), entropy_loss.mean(0))
 
   test_forward = jax.jit(functools.partial(forward, config=eval_config))
 
@@ -392,9 +395,9 @@ def training_loop(
       # Use the results inside a JAX implicit differentiation construction.
       rng_it, rng = jax.random.split(rng)
 
-      # jax.profiler.start_trace(tensorboard_logdir)
+      jax.profiler.start_trace(tensorboard_logdir)
       t0 = time.time()
-      (loss, (preds, logits, q, label_loss, curiosity_loss, entropy_loss)), model_grad = value_grad_loss_fn(
+      (loss, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss)), model_grad = value_grad_loss_fn(
           model_state,
           graphs,
           graphs.sample_start_node_id(),
@@ -403,7 +406,7 @@ def training_loop(
       )
       loss.block_until_ready()
       t1 = time.time()
-      # jax.profiler.stop_trace()
+      jax.profiler.stop_trace()
       print(f"Forward + backward pass: \t{t1 - t0:.3f}s")
       # print(loss)
       del logits
@@ -454,7 +457,7 @@ def training_loop(
 
             # Plot subgraph on first test datapoint of each class
             t0 = time.time()
-            loss_rep, (preds_rep, logits_rep, q_rep, label_loss, curiosity_loss, entropy_loss) = test_forward(
+            loss_rep, (preds_rep, logits_rep, q_rep, dense_submat_rep, label_loss, curiosity_loss, entropy_loss) = test_forward(
                 model_state, test_representatives_graphs,
                 test_representatives_graphs.sample_start_node_id(), rep_labels,
                 )
@@ -474,6 +477,14 @@ def training_loop(
                         test_representatives_graphs.start_node_coords.T,
                         num_classes)),
                 step=step)
+
+            tf.summary.image(
+              'Adjacency matrix, class representatives',
+              train_utils.plot_to_image(
+                train_utils.plot_adj_mats(dense_submat_rep, preds_rep, num_classes)
+              ),
+              step=step
+            )
 
       else:
         losses.append(loss)
@@ -520,7 +531,7 @@ def training_loop(
         graphs_test = make_graphs(data_test, patch_size, bins)
 
         loss_test, (preds, logits,
-                    q, label_loss_test, curiosity_loss_test, entropy_loss_test) = test_forward(model_state, graphs_test,
+                    q, dense_submat_test, label_loss_test, curiosity_loss_test, entropy_loss_test) = test_forward(model_state, graphs_test,
                                       graphs_test.sample_start_node_id(),
                                       labels_test)
 
@@ -590,6 +601,7 @@ def main(argv):
       rho=FLAGS.rho,
       num_steps_extractor=FLAGS.num_steps_extractor,
       extractor_tol=FLAGS.extractor_tol,
+      learn_agent=FLAGS.learn_agent,
       max_subgraph_size=FLAGS.max_subgraph_size,
       max_graph_size=FLAGS.max_graph_size,
       agent_hidden_dim=FLAGS.agent_hidden_dim,
