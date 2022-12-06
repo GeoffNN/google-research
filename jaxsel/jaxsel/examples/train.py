@@ -68,7 +68,7 @@ flags.DEFINE_integer('log_freq', 10,
                      'Log batch accuracy and loss every log_freq iterations.')
 flags.DEFINE_integer('plot_freq', 100,
                      'Log image plots for a random train examples and first val points for each class every plot_freq iterations.')
-flags.DEFINE_integer('n_epochs', 5, 'Number of training epochs.')
+flags.DEFINE_integer('n_epochs', 100, 'Number of training epochs.')
 flags.DEFINE_float(
     'alpha', 1e-3,
     'Probability of teleporting back to initial node distribution. Make smaller to increase initial subgraph radius.')
@@ -384,6 +384,7 @@ def training_loop(
 
   tfds.display_progress_bar(True)
   print("Starting training.")
+  updated_after_exploration = False
   for epoch in range(n_epochs):
     for batch in tfds.as_numpy(train_dataset):
 
@@ -395,11 +396,15 @@ def training_loop(
           curiosity_weight=curiosity_weight,
           entropy_weight=entropy_weight,
           label_weight=label_weight)
-        # Update the value and grad function
-        value_grad_loss_fn = jax.value_and_grad(
-            functools.partial(forward, config=train_config), has_aux=True)
-        value_grad_loss_fn = jax.jit(value_grad_loss_fn)
 
+        if not updated_after_exploration:
+          # Update the value and grad function
+          # Avoids jitting at each step after pure exploration has ended
+          value_grad_loss_fn = jax.value_and_grad(
+              functools.partial(forward, config=train_config), has_aux=True)
+          value_grad_loss_fn = jax.jit(value_grad_loss_fn)
+          updated_after_exploration = True
+        
       data, labels = batch
       # TODO(gnegiar): build the graphs once before hand, in the dataloading
       # Make graphs from the batch of images

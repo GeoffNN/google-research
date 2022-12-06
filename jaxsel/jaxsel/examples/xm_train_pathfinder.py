@@ -39,9 +39,9 @@ def main(*args):
 
         batch_sizes = [32]
         max_subgraph_sizes = [400] #, 200, 500]
-        curiosity_weights = [1., 0.]
+        curiosity_weights = [.1, 0.]
         label_weights = [0., 1.]
-        entropy_weights = [10.]
+        entropy_weights = [10., 0.]
         learning_rates = [5e-4]
         alphas = [2e-5]
         rhos = [0.]
@@ -76,7 +76,7 @@ def main(*args):
                     ('max_graph_size', resolution ** 2 + 10),
                     ('pathfinder_difficulty', difficulty),
                     ('seed', 0),
-                    ('exploration_steps', 1000)
+                    ('exploration_steps', 300)
                 ]
             )
             for (bs, lr, max_subgraph_size, alpha, rho, ridge, curiosity_weight, label_weight, entropy_weight) in itertools.product(
