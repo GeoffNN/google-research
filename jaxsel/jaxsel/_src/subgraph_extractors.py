@@ -351,6 +351,7 @@ def _dense_fixed_point(q, dense_adjacency_matrix,
 # TODO(gnegiar): use binary search. Look at jnp.searchsorted.
 # https://github.com/google/jax/pull/9108/files
 # This would greatly lower memory requirements, at the possible cost of speed.
+# For now we need the speed.
 @jax.jit
 def _subscript(bcoo_mat, idx):
   """Returns a single element from a sparse matrix at a given index.
