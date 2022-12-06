@@ -117,14 +117,10 @@ class ClassificationPipeline(nn.Module):
     we start by encouraging selection of fore-ground pixels.
     """
     # Extract values of the image at the extracted pixels
-    # Normalize image
-    flat_image = image.flatten()
-    # Normalize so that each pixel is between 0 and 1.
-    max_flat_image = flat_image.max(keepdims=True)
-    normalized_flat_image = jnp.clip(flat_image -1, a_min=0) / max_flat_image
-    # q is already in [0, 1], so no need to normalize.
-    # q should be 0 where image is 0
-    extracted_image = jnp.take(normalized_flat_image, node_ids, fill_value=0.)
+    extracted_image = jnp.take(jnp.clip(image.flatten(), a_min=0.), node_ids, fill_value=0.)
+    # Normalize the extracted image and the extracted node weights to match scale
+    normalized_image = jax.nn.softmax(jnp.where(extracted_image!=0, extracted_image, -jnp.inf))
+    normalized_q = jax.nn.softmax(jnp.where(q!=0, q, -jnp.inf))
 
     # We reweight the matching loss by the inverse distance from the start node: we want to
     # encourage going far from the start node
@@ -133,7 +129,8 @@ class ClassificationPipeline(nn.Module):
     # TODO: use norm squared?
     distance_from_start_node = jnp.linalg.norm(pixel_coords - start_pixel_coords, axis=-1)
     extracted_reweighting = jnp.take(distance_from_start_node, node_ids, fill_value=0.)
-    loss = ((q - extracted_image) ** 2 * extracted_reweighting).sum()
+
+    loss = ((normalized_q - normalized_image) ** 2 * extracted_reweighting).sum()
     return loss
 
   def entropy_loss_fun(self, q):
@@ -186,9 +183,9 @@ class ClassificationPipeline(nn.Module):
     logits = self.graph_classifier(
         node_features=node_features,
         node_ids=node_ids,
-        adjacency_mat=jnp.where(dense_submat[Ellipsis, jnp.newaxis] != 0, 1., 0.),
+        adjacency_mat=jnp.where(dense_submat[Ellipsis, jnp.newaxis] != 0, 1., 0.),  # TODO: Try without where using the true values?
         # adjacency_mat=dense_submat[..., jnp.newaxis],
-        qstar=dense_q,
+        qstar=dense_q / dense_q.std(),  # Normalizing for scale: this seems to work best
         # qstar=10 * (dense_q**2)**(1. / 8),  # normalizing for scale
     )
 
