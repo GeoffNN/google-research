@@ -108,7 +108,7 @@ class ClassificationPipeline(nn.Module):
     else:
       return losses.binary_logistic_loss(logits, label, num_classes=num_classes)
 
-  def curiosity_loss_fun(self, image, q, node_ids):
+  def curiosity_loss_fun(self, image, q, node_ids, graphs):
     """Computes the curiosity loss function.
     
     This loss function encourages exploration, similarly to 
@@ -125,7 +125,15 @@ class ClassificationPipeline(nn.Module):
     # q is already in [0, 1], so no need to normalize.
     # q should be 0 where image is 0
     extracted_image = jnp.take(normalized_flat_image, node_ids, fill_value=0.)
-    loss = ((q - extracted_image) ** 2).sum()
+
+    # We reweight the matching loss by the inverse distance from the start node: we want to
+    # encourage going far from the start node
+    pixel_coords = jnp.mgrid[0:image.shape[0]:1,0:image.shape[1]:1].transpose(1, 2, 0)
+    start_pixel_coords = graphs.start_node_coords[None, None] # Reshape to match image shape
+    # TODO: use norm squared?
+    distance_from_start_node = jnp.linalg.norm(pixel_coords - start_pixel_coords, axis=-1)
+    extracted_reweighting = jnp.take(distance_from_start_node, node_ids, fill_value=0.)
+    loss = ((q - extracted_image) ** 2 * extracted_reweighting).sum()
     return loss
 
   def entropy_loss_fun(self, q):
@@ -210,10 +218,9 @@ class ClassificationPipeline(nn.Module):
     # Extract subgraph and associated features
     cfg = self.config
     logits, (q, dense_submat, node_ids, dense_q) = self(graphs, start_node_ids)
-    # Debug why gradients are 0 on the curiosity loss
     preds = self.pred_fun(logits)
     label_loss = self.loss_fun(logits, labels)
-    curiosity_loss = self.curiosity_loss_fun(graphs.image, dense_q, node_ids) if cfg.curiosity_weight > 0. else 0.
+    curiosity_loss = self.curiosity_loss_fun(graphs.image, dense_q, node_ids, graphs) if cfg.curiosity_weight > 0. else 0.
     # Add entropy term to deconcentrate the weights
     entropy_loss = self.entropy_loss_fun(dense_q)
     loss_vals = cfg.label_weight * label_loss + cfg.curiosity_weight * curiosity_loss + cfg.entropy_weight * entropy_loss

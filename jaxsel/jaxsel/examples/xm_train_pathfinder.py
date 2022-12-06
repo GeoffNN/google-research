@@ -38,17 +38,17 @@ def main(*args):
         )
 
         batch_sizes = [32]
-        max_subgraph_sizes = [300] #, 200, 500]
+        max_subgraph_sizes = [400] #, 200, 500]
         curiosity_weights = [1., 0.]
         label_weights = [0., 1.]
         entropy_weights = [10.]
-        learning_rates = [5e-5]
+        learning_rates = [5e-4]
         alphas = [2e-5]
-        rhos = [1e-4]
-        ridges = [1e-5]
+        rhos = [0.]
+        ridges = [1e-7]
 
         resolution = 32
-        difficulty = 'hard'
+        difficulty = 'easy'
         trials = {}
 
         trials[32] = list(
@@ -61,13 +61,13 @@ def main(*args):
                     ("alpha", alpha),
                     ("rho", rho),
                     ('ridge_backward', ridge),
-                    ('n_epochs', 200),
+                    ('n_epochs', 1000),
                     ('num_steps_extractor', 30),
-                    ('n_encoder_layers', 1),
-                    ('num_heads', 2),
-                    ('mlp_dim', 32),
-                    ('graph_model_hidden_dim', 32), 
-                    ('qkv_dim', 16),
+                    ('n_encoder_layers', 8),
+                    ('num_heads', 6),
+                    ('mlp_dim', 64),
+                    ('graph_model_hidden_dim', 64), 
+                    ('qkv_dim', 64),
                     ('patch_size', 9),
                     ('curiosity_weight', curiosity_weight),
                     ('label_weight', label_weight),
@@ -76,6 +76,7 @@ def main(*args):
                     ('max_graph_size', resolution ** 2 + 10),
                     ('pathfinder_difficulty', difficulty),
                     ('seed', 0),
+                    ('exploration_steps', 1000)
                 ]
             )
             for (bs, lr, max_subgraph_size, alpha, rho, ridge, curiosity_weight, label_weight, entropy_weight) in itertools.product(

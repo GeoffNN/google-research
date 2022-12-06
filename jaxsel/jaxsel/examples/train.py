@@ -18,7 +18,7 @@
 Trains an agent and graph models on MNIST.
 """
 
-from google.cloud.aiplatform.training_utils import cloud_profiler
+# from google.cloud.aiplatform.training_utils import cloud_profiler
 
 import json
 from datetime import datetime
@@ -133,6 +133,9 @@ flags.DEFINE_float(
 flags.DEFINE_float(
   'label_weight', 1., 'Weight for supervised loss function.'
 )
+flags.DEFINE_integer(
+  'exploration_steps', 1000, 'Number of epochs before adding in the label loss'
+)
 flags.DEFINE_integer('test_log_freq', 1, 'Log test statistics every n epochs.')
 flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
 
@@ -163,6 +166,7 @@ def training_loop(
     learn_agent,
     agent_hidden_dim,
     n_encoder_layers,
+    exploration_steps=1000,
     curiosity_weight=0.,
     entropy_weight=0.,
     label_weight=1.,
@@ -294,7 +298,7 @@ def training_loop(
     graph_classifier_config,
     curiosity_weight=curiosity_weight,
     entropy_weight=entropy_weight,
-    label_weight=label_weight)
+    label_weight=label_weight if exploration_steps < 1 else 0.)
 
   eval_config = pipeline.ClassificationPipelineConfig(
       extractor_config, graph_classifier_config.replace(deterministic=True),
@@ -382,6 +386,20 @@ def training_loop(
   print("Starting training.")
   for epoch in range(n_epochs):
     for batch in tfds.as_numpy(train_dataset):
+
+      # After pure exploration is done, add the label loss
+      if step > exploration_steps:
+        train_config = pipeline.ClassificationPipelineConfig(
+          extractor_config,
+          graph_classifier_config,
+          curiosity_weight=curiosity_weight,
+          entropy_weight=entropy_weight,
+          label_weight=label_weight)
+        # Update the value and grad function
+        value_grad_loss_fn = jax.value_and_grad(
+            functools.partial(forward, config=train_config), has_aux=True)
+        value_grad_loss_fn = jax.jit(value_grad_loss_fn)
+
       data, labels = batch
       # TODO(gnegiar): build the graphs once before hand, in the dataloading
       # Make graphs from the batch of images
@@ -395,7 +413,7 @@ def training_loop(
       # Use the results inside a JAX implicit differentiation construction.
       rng_it, rng = jax.random.split(rng)
 
-      jax.profiler.start_trace(tensorboard_logdir)
+      # jax.profiler.start_trace(tensorboard_logdir)
       t0 = time.time()
       (loss, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss)), model_grad = value_grad_loss_fn(
           model_state,
@@ -406,7 +424,7 @@ def training_loop(
       )
       loss.block_until_ready()
       t1 = time.time()
-      jax.profiler.stop_trace()
+      # jax.profiler.stop_trace()
       print(f"Forward + backward pass: \t{t1 - t0:.3f}s")
       # print(loss)
       del logits
@@ -609,6 +627,7 @@ def main(argv):
       n_epochs=FLAGS.n_epochs,
       ridge=FLAGS.ridge_backward,
       tensorboard_logdir=tb_logdir,
+      exploration_steps=FLAGS.exploration_steps,
       curiosity_weight=FLAGS.curiosity_weight,
       entropy_weight=FLAGS.entropy_weight,
       label_weight=FLAGS.label_weight,

@@ -46,13 +46,13 @@ def main(*args):
 
         batch_sizes = [64] 
         max_subgraph_sizes = [200] #, 200, 500]
-        learning_rates = [1e-5, 5e-4]
+        learning_rates = [1e-3]
         curiosity_weights = [1.]
-        entropy_weights = [1e-2]
-        label_weights = [0.]
+        entropy_weights = [1e1]
+        label_weights = [1.]
         alphas = [2e-4]
-        rhos = [1e-4, 1e-5]
-        ridges = [1e-4, 1e-6]
+        rhos = [1e-4, 0.]
+        ridges = [1e-7]
 
         trials = list(
             dict(
@@ -66,7 +66,8 @@ def main(*args):
                     ('ridge_backward', ridge),
                     ('curiosity_weight', curiosity_weight),
                     ('entropy_weight', entropy_weight),
-                    ('label_weight', label_weight)
+                    ('label_weight', label_weight),
+                    ('exploration_steps', 400)
                 ]
             )
             for (bs, lr, max_subgraph_size, alpha, rho, ridge,curiosity_weight, label_weight, entropy_weight) in itertools.product(
