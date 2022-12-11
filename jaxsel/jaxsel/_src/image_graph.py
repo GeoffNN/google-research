@@ -192,7 +192,7 @@ class ImageGraph(graph_api.GraphAPI):
     Returns:
       patch: Flattened window around the start node, used as node features.
     """
-    return jnp.concatenate([self.node_patch(self._start_node_id), jnp.array([self.start_node_id])], axis=None)
+    return jnp.concatenate([self.node_patch(self._start_node_id), jnp.array([self._start_node_id])], axis=None)
 
   def _outgoing_edges_out_of_bounds_pixel(self, node_id, relation_ids):
     del node_id

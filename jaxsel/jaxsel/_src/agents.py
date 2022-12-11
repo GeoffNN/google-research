@@ -189,8 +189,10 @@ def product(iterable, start=1.):
 @struct.dataclass
 class AgentConfig:
   graph_parameters: graph_api.GraphParameters
+  max_graph_size: int
   embedding_dim: int
   hidden_dim: int
+  exploration_bonus_weight: float = 0.
 
 
 class SimpleFiLMedAgentModel(nn.Module, Agent):
@@ -211,6 +213,10 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
         self.config.graph_parameters.node_vocab_size,
         self.config.embedding_dim,
         name="Node feature embedding")
+    self.node_id_embedding = nn.Embed(
+      self.config.max_graph_size,
+      self.config.embedding_dim
+    )
     self.relation_embedding = nn.Embed(
         self.config.graph_parameters.num_relation_types,
         self.config.embedding_dim,
@@ -219,8 +225,11 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
         self.config.graph_parameters.node_vocab_size,
         self.config.embedding_dim,
         name="Neighbor feature embedding")
-    self.input_embedding = (self.node_embedding, self.relation_embedding,
-                            self.neighbor_embedding)
+    self.input_embedding = (
+      self.node_id_embedding, 
+      self.node_embedding, self.node_id_embedding, 
+      self.relation_embedding,
+      self.neighbor_embedding, self.node_id_embedding)
 
     # Hidden layers for multiplication in FiLM-like layer
     self.node_hidden = nn.Dense(
@@ -234,8 +243,8 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
 
     self.output_layer = nn.Dense(1, name="Output layer")
 
-  def __call__(self, task_features, node_features, neighbor_relations,
-               neighbor_features):
+  def __call__(self, task_features, node_features_cat, neighbor_relations,
+               neighbor_features_cat):
     """Maps task, node, edge and neighbors to logits.
 
     We use both multiplicative and additive dependency between
@@ -243,29 +252,41 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
 
     Args:
       task_features: Not used.
-      node_features: Integer tensor of size `num_neighbors x num_node_features`
-        with (duplicated) features of the current node.
+      node_features_cat: Integer tensor of size `num_neighbors x num_node_features`
+        with (duplicated) features of the current node. Categorical features.
       neighbor_relations: Integer tensor of size `num_neighbors`.
-      neighbor_features: Integer tensor of size `num_neighbors x
-        num_node_features` of neighbor features.
+      neighbor_features_cat: Integer tensor of size `num_neighbors x
+        num_node_features` of neighbor features. Categorical features.
 
     Returns:
       A float tensor of size `num_neighbors` with logits associated with
       the probability of transitioning to that neighbor.
     """
-    del task_features
+    start_node_id = task_features[..., -1]
+
     num_neighbors = len(neighbor_relations)
-    # Embed all inputs
-    inputs = (node_features, neighbor_relations, neighbor_features)
+
+    # Split out node_id from the patch features
+    node_id = node_features_cat[..., -1]
+    node_features_cat = node_features_cat[..., :-1]
+
+    neighbor_node_id = node_features_cat[..., -1]
+    neighbor_features_cat = neighbor_features_cat[..., :-1]
+
+   # Embed all inputs
+    inputs = (start_node_id, node_features_cat, node_id, neighbor_relations, neighbor_features_cat, neighbor_node_id)
     embeddings = [emb(x) for emb, x in zip(self.input_embedding, inputs)]
 
     # Reshape
-    node_embs, relation_embs, neighbor_embs = embeddings
+    start_node_id_emb, node_embs, node_id_embs, relation_embs, neighbor_embs, neighbor_id_embs = embeddings
+    start_node_id_emb = start_node_id_emb.reshape(num_neighbors, -1)
     node_embs = node_embs.reshape(num_neighbors, -1)
+    node_id_embs = node_id_embs.reshape(num_neighbors, -1)
     relation_embs = relation_embs.reshape(num_neighbors, -1)
     neighbor_embs = neighbor_embs.reshape(num_neighbors, -1)
+    neighbor_id_embs = neighbor_id_embs.reshape(num_neighbors, -1)
 
-    local_feature_embs = jnp.column_stack((node_embs, neighbor_embs))
+    local_feature_embs = jnp.column_stack((start_node_id_emb, node_embs, node_id_embs, neighbor_embs, neighbor_id_embs))
     hidden_local_features = self.node_hidden(local_feature_embs)
     hidden_relation_embs = self.relation_hidden_mul(relation_embs)
     hidden_relation_bias = self.relation_hidden_sum(relation_embs)
@@ -275,8 +296,14 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
     mixed_representation = hidden_local_features * hidden_relation_embs + hidden_relation_bias
 
     mixed_representation = nn.relu(mixed_representation)
-    neighbor_logits = self.output_layer(mixed_representation)
-    return neighbor_logits.squeeze(-1)
+    neighbor_logits = self.output_layer(mixed_representation).squeeze(-1)
+
+    # Add a bonus towards foreground pixels (which have high values)
+    exploration_bonus = neighbor_features_cat.reshape(num_neighbors, -1).sum(-1)
+    # TODO: normalize neighbor_logits and exploration bonus to be on the same scale
+    # Or keep running mean/std of each and normalize?
+    # return neighbor_logits + self.config.exploration_bonus_weight * exploration_bonus
+    return exploration_bonus
 
 
 class GeneralizedMultiplicativeAgentModel(nn.Module, Agent):
