@@ -178,8 +178,10 @@ class ImageGraph(graph_api.GraphAPI):
                        self.padding_value)
 
   def node_features(self, node_id):
-    """Concatenates the patch surrounding `nocde_id` to represent it."""
-    return self.node_patch(node_id).reshape(-1)
+    """Concatenates the patch surrounding `node_id` to the node's ID to represent it.
+    
+    The node id serves as a position encoding."""
+    return jnp.concatenate([self.node_patch(node_id), jnp.array([node_id])], axis=None)
 
   def task_features(self):
     """Describe the task just in terms of the start location.
@@ -190,7 +192,7 @@ class ImageGraph(graph_api.GraphAPI):
     Returns:
       patch: Flattened window around the start node, used as node features.
     """
-    return self.node_patch(self._start_node_id).reshape(-1)
+    return jnp.concatenate([self.node_patch(self._start_node_id), jnp.array([self.start_node_id])], axis=None)
 
   def _outgoing_edges_out_of_bounds_pixel(self, node_id, relation_ids):
     del node_id
