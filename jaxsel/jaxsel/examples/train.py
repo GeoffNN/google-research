@@ -19,6 +19,9 @@ Trains an agent and graph models on MNIST.
 """
 
 # from google.cloud.aiplatform.training_utils import cloud_profiler
+import wandb
+# For logging the figures to wandb
+import matplotlib.pyplot as plt
 
 import json
 from datetime import datetime
@@ -64,7 +67,7 @@ flags.DEFINE_enum('pathfinder_difficulty', 'easy', ['easy', 'hard'],
 flags.DEFINE_integer('pathfinder_resolution', 32,
                      'Resolution for the pathfinder task.')
 flags.DEFINE_integer('batch_size', 128, 'Training batch size')
-flags.DEFINE_integer('log_freq', 10,
+flags.DEFINE_integer('log_freq', 50,
                      'Log batch accuracy and loss every log_freq iterations.')
 flags.DEFINE_integer('plot_freq', 100,
                      'Log image plots for a random train examples and first val points for each class every plot_freq iterations.')
@@ -134,10 +137,18 @@ flags.DEFINE_float(
   'label_weight', 1., 'Weight for supervised loss function.'
 )
 flags.DEFINE_integer(
-  'exploration_steps', 1000, 'Number of epochs before adding in the label loss'
+  'pure_exploration_steps', 300, 'Number of epochs before adding in the label loss'
+)
+flags.DEFINE_integer(
+  'exploration_steps', 1000, 'Number of epochs for using the exploration bonus in the Agent model and the curiosity/entropy loss terms.'
+)
+flags.DEFINE_float(
+  'exploration_bonus_weight', 0., "Exploration bonus in the Agent model: we add a bonus in the transition probabilities."
 )
 flags.DEFINE_integer('test_log_freq', 1, 'Log test statistics every n epochs.')
 flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
+
+flags.DEFINE_bool('wandb', True, help="Use wandb for logging.")
 
 metrics = tf.keras.metrics
 
@@ -166,7 +177,9 @@ def training_loop(
     learn_agent,
     agent_hidden_dim,
     n_encoder_layers,
-    exploration_steps=1000,
+    pure_exploration_steps=300,
+    exploration_steps=2000,
+    exploration_bonus_weight=0.,
     curiosity_weight=0.,
     entropy_weight=0.,
     label_weight=1.,
@@ -176,6 +189,7 @@ def training_loop(
     log_freq=10,
     plot_freq=20,
     test_log_freq=1,
+    use_wandb=True,
     seed=0,
 ):
   """Image classification training loop.
@@ -275,7 +289,7 @@ def training_loop(
   rng = jax.random.PRNGKey(seed)
 
   # TODO(gnegiar): Define configs outside of training loop, and pass as args.
-  agent_config = agents.AgentConfig(graph_parameters, agent_hidden_dim,
+  agent_config = agents.AgentConfig(graph_parameters, max_graph_size, agent_hidden_dim,
                                     agent_hidden_dim)
 
   extractor_config = subgraph_extractors.ExtractorConfig(
@@ -375,21 +389,18 @@ def training_loop(
 
   print('Start training!')
   
-  try:
-    cloud_profiler.init()
-  except Exception:
-    pass
 
   # TODO(gnegiar): Add description with loss to tqdm
 
   tfds.display_progress_bar(True)
   print("Starting training.")
+  updated_after_pure_exploration = False
   updated_after_exploration = False
   for epoch in range(n_epochs):
     for batch in tfds.as_numpy(train_dataset):
 
       # After pure exploration is done, add the label loss
-      if step > exploration_steps:
+      if step > pure_exploration_steps:
         train_config = pipeline.ClassificationPipelineConfig(
           extractor_config,
           graph_classifier_config,
@@ -397,13 +408,30 @@ def training_loop(
           entropy_weight=entropy_weight,
           label_weight=label_weight)
 
-        if not updated_after_exploration:
+        if not updated_after_pure_exploration:
           # Update the value and grad function
           # Avoids jitting at each step after pure exploration has ended
           value_grad_loss_fn = jax.value_and_grad(
               functools.partial(forward, config=train_config), has_aux=True)
           value_grad_loss_fn = jax.jit(value_grad_loss_fn)
-          updated_after_exploration = True
+          updated_after_pure_exploration = True
+
+      
+      if step > exploration_steps:
+        train_config = pipeline.ClassificationPipelineConfig(
+          extractor_config.replace(agent_config=agent_config.replace(exploration_bonus_weight=0.)),
+          graph_classifier_config,
+          curiosity_weight=0.,
+          entropy_weight=0.,
+          label_weight=label_weight)
+
+        if not updated_after_pure_exploration:
+          # Update the value and grad function
+          # Avoids jitting at each step after pure exploration has ended
+          value_grad_loss_fn = jax.value_and_grad(
+              functools.partial(forward, config=train_config), has_aux=True)
+          value_grad_loss_fn = jax.jit(value_grad_loss_fn)
+          updated_after_pure_exploration = True
         
       data, labels = batch
       # TODO(gnegiar): build the graphs once before hand, in the dataloading
@@ -418,8 +446,6 @@ def training_loop(
       # Use the results inside a JAX implicit differentiation construction.
       rng_it, rng = jax.random.split(rng)
 
-      # jax.profiler.start_trace(tensorboard_logdir)
-      t0 = time.time()
       (loss, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss)), model_grad = value_grad_loss_fn(
           model_state,
           graphs,
@@ -427,11 +453,6 @@ def training_loop(
           labels,
           rng=rng_it,
       )
-      loss.block_until_ready()
-      t1 = time.time()
-      # jax.profiler.stop_trace()
-      print(f"Forward + backward pass: \t{t1 - t0:.3f}s")
-      # print(loss)
       del logits
 
       batch_accuracy = jnp.mean((preds == labels).astype(float))
@@ -450,71 +471,122 @@ def training_loop(
           graph_model_grad_norm = tree_utils.global_norm(
               model_grad['params']['graph_classifier'])
 
-          with tf_logger_train.as_default():
-            tf.summary.scalar('loss', loss, step=step)
-            tf.summary.scalar('loss_label', label_loss, step=step)
-            tf.summary.scalar('loss_curiosity', curiosity_loss, step=step)
-            tf.summary.scalar('loss_entropy', entropy_loss, step=step)
+          if use_wandb:
+            wandb.log({
+              'loss': loss,
+              'loss_label': label_loss,
+              'curiosity_loss': curiosity_loss,
+              'entropy_loss': entropy_loss,
+              'batch': step,
+              'accuracy': batch_accuracy,
+              'graph_model_grad_norm': graph_model_grad_norm,
+              'agent_model_grad_norm': agent_model_grad_norm,
+            })
+          
+          else:
+            with tf_logger_train.as_default():
+              tf.summary.scalar('loss', loss, step=step)
+              tf.summary.scalar('loss_label', label_loss, step=step)
+              tf.summary.scalar('loss_curiosity', curiosity_loss, step=step)
+              tf.summary.scalar('loss_entropy', entropy_loss, step=step)
 
-            tf.summary.scalar('accuracy', batch_accuracy, step=step)
-            tf.summary.scalar(
-                'graph_model_grad_norm', graph_model_grad_norm, step=step)
-            tf.summary.scalar(
-                'agent_model_grad_norm', agent_model_grad_norm, step=step)
+              tf.summary.scalar('accuracy', batch_accuracy, step=step)
+              tf.summary.scalar(
+                  'graph_model_grad_norm', graph_model_grad_norm, step=step)
+              tf.summary.scalar(
+                  'agent_model_grad_norm', agent_model_grad_norm, step=step)
 
         if step % plot_freq == 0:
-          with tf_logger_train.as_default():
-            tf.summary.image(
-                'Training data',
+
+          # Plot subgraph on first test datapoint of each class
+          loss_rep, (preds_rep, logits_rep, q_rep, dense_submat_rep, label_loss, curiosity_loss, entropy_loss) = test_forward(
+              model_state, test_representatives_graphs,
+              test_representatives_graphs.sample_start_node_id(), rep_labels,
+              )
+
+          del loss_rep, logits_rep
+
+          if use_wandb:
+            training_data_plot = train_utils.plot_subgraph(
+                          img=data[0].squeeze(),
+                          # Select first element in batch of qs
+                          q=jsparse.BCOO((q.data[0], q.indices[0]),
+                                        shape=q.shape[1:]),
+                          label=preds[0],
+                          # Transposing usual batch convention due to flax
+                          start_node_coords=graphs.start_node_coords[:, 0])
+            wandb.log({
+              'Training data': training_data_plot, 
+              "batch": step})
+            plt.close()
+            
+            wandb.log({'Node weights': wandb.Histogram(q.data[0]), "batch": step})
+
+            class_reps =  train_utils.plot_subgraph_classes(
+                          test_rep_images,
+                          q_rep,
+                          preds_rep,
+                          # transpose because of weird flax behavior
+                          test_representatives_graphs.start_node_coords.T,
+                          num_classes)
+
+            wandb.log({
+              "batch": step,
+              "Class representatives": class_reps
+            })
+            plt.close()
+
+            adj_mats_class_reps = train_utils.plot_adj_mats(dense_submat_rep, preds_rep, num_classes)
+            wandb.log({
+                "batch": step,
+                "Adjacency matrix, Class representatives": adj_mats_class_reps
+              }) 
+            plt.close()
+
+
+
+          else:
+
+            with tf_logger_train.as_default():
+              tf.summary.image(
+                  'Training data',
+                  train_utils.plot_to_image(
+                      figure=train_utils.plot_subgraph(
+                          img=data[0].squeeze(),
+                          # Select first element in batch of qs
+                          q=jsparse.BCOO((q.data[0], q.indices[0]),
+                                        shape=q.shape[1:]),
+                          label=preds[0],
+                          # Transposing usual batch convention due to flax
+                          start_node_coords=graphs.start_node_coords[:, 0])),
+                  step=step)
+              tf.summary.histogram('Node weights', q.data[0], step=step)
+
+              tf.summary.image(
+                  'Class representatives',
+                  train_utils.plot_to_image(
+                      train_utils.plot_subgraph_classes(
+                          test_rep_images,
+                          q_rep,
+                          preds_rep,
+                          # transpose because of weird flax behavior
+                          test_representatives_graphs.start_node_coords.T,
+                          num_classes)),
+                  step=step)
+
+              tf.summary.image(
+                'Adjacency matrix, class representatives',
                 train_utils.plot_to_image(
-                    figure=train_utils.plot_subgraph(
-                        img=data[0].squeeze(),
-                        # Select first element in batch of qs
-                        q=jsparse.BCOO((q.data[0], q.indices[0]),
-                                       shape=q.shape[1:]),
-                        label=preds[0],
-                        # Transposing usual batch convention due to flax
-                        start_node_coords=graphs.start_node_coords[:, 0])),
-                step=step)
-            tf.summary.histogram('Node weights', q.data[0], step=step)
-
-            # Plot subgraph on first test datapoint of each class
-            t0 = time.time()
-            loss_rep, (preds_rep, logits_rep, q_rep, dense_submat_rep, label_loss, curiosity_loss, entropy_loss) = test_forward(
-                model_state, test_representatives_graphs,
-                test_representatives_graphs.sample_start_node_id(), rep_labels,
-                )
-            # loss_rep.block_until_ready()
-            # t1 = time.time()
-            # print(f"Test forward: {t1 - t0:.3f}")
-
-            del loss_rep, logits_rep
-            tf.summary.image(
-                'Class representatives',
-                train_utils.plot_to_image(
-                    train_utils.plot_subgraph_classes(
-                        test_rep_images,
-                        q_rep,
-                        preds_rep,
-                        # transpose because of weird flax behavior
-                        test_representatives_graphs.start_node_coords.T,
-                        num_classes)),
-                step=step)
-
-            tf.summary.image(
-              'Adjacency matrix, class representatives',
-              train_utils.plot_to_image(
-                train_utils.plot_adj_mats(dense_submat_rep, preds_rep, num_classes)
-              ),
-              step=step
-            )
+                  train_utils.plot_adj_mats(dense_submat_rep, preds_rep, num_classes)
+                ),
+                step=step
+              )
 
       else:
         losses.append(loss)
         steps.append(step)
         if step % log_freq == 0:
           logged_steps.append(step)
-          import matplotlib.pyplot as plt
           
           agent_model_grad_norm = tree_utils.global_norm(
               model_grad['params']['extractor'])
@@ -553,10 +625,14 @@ def training_loop(
         # TODO(gnegiar): build the graphs once before hand, in the dataloading
         graphs_test = make_graphs(data_test, patch_size, bins)
 
+        t0 = time.time()
         loss_test, (preds, logits,
                     q, dense_submat_test, label_loss_test, curiosity_loss_test, entropy_loss_test) = test_forward(model_state, graphs_test,
                                       graphs_test.sample_start_node_id(),
                                       labels_test)
+        loss_test.block_until_ready()
+        t1 = time.time()
+        print(f"Test forward: {t1 - t0:.3f}s")
 
         test_accuracy.update_state(preds, labels_test)
 
@@ -564,13 +640,25 @@ def training_loop(
 
       if test_accuracy_value > best_test_accuracy:
         best_test_accuracy = test_accuracy_value
-      if tensorboard_logdir is not None:
-        with tf_logger_test.as_default():
-          tf.summary.scalar('accuracy', test_accuracy_value, step=step)
-          tf.summary.scalar('loss', loss_test, step=step)
-          tf.summary.scalar('loss_label', label_loss_test, step=step)
-          tf.summary.scalar('loss_curiosity', curiosity_loss_test, step=step)
-          tf.summary.scalar('loss_entropy', entropy_loss_test, step=step)
+
+      if use_wandb:
+        wandb.log({
+          "batch": step,
+          "test accuracy": test_accuracy_value,
+          "test loss": loss_test,
+          "test curiosity loss": curiosity_loss_test,
+          "test entropy loss": entropy_loss_test
+        })
+
+      else:
+
+        if tensorboard_logdir is not None:
+          with tf_logger_test.as_default():
+            tf.summary.scalar('accuracy', test_accuracy_value, step=step)
+            tf.summary.scalar('loss', loss_test, step=step)
+            tf.summary.scalar('loss_label', label_loss_test, step=step)
+            tf.summary.scalar('loss_curiosity', curiosity_loss_test, step=step)
+            tf.summary.scalar('loss_entropy', entropy_loss_test, step=step)
 
       # Reset metric for next epoch.
       test_accuracy.reset_state()
@@ -586,6 +674,12 @@ def training_loop(
 def main(argv):
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
+
+  if FLAGS.wandb:
+    wandb.init(project=f'jaxsel_{FLAGS.dataset}_{FLAGS.pathfinder_difficulty + "_" + str(FLAGS.pathfinder_resolution) if FLAGS.dataset == "lra_pathfinder" else ""}',
+    dir=f"/scratch/gnegiar/jaxsel_logs/{FLAGS.dataset}/{FLAGS.pathfinder_resolution}/{FLAGS.pathfinder_difficulty}")
+    wandb.run.log_code("jaxsel")
+    wandb.config.update(flags.FLAGS)
 
   # Hide any GPUs from TensorFlow. Otherwise TF might reserve memory and make
   # it unavailable to JAX.
@@ -632,6 +726,8 @@ def main(argv):
       n_epochs=FLAGS.n_epochs,
       ridge=FLAGS.ridge_backward,
       tensorboard_logdir=tb_logdir,
+      pure_exploration_steps=FLAGS.pure_exploration_steps,
+      exploration_bonus_weight=FLAGS.exploration_bonus_weight,
       exploration_steps=FLAGS.exploration_steps,
       curiosity_weight=FLAGS.curiosity_weight,
       entropy_weight=FLAGS.entropy_weight,
