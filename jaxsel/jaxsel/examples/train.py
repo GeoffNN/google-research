@@ -453,7 +453,6 @@ def training_loop(
           labels,
           rng=rng_it,
       )
-      del logits
 
       batch_accuracy = jnp.mean((preds == labels).astype(float))
 
@@ -470,6 +469,9 @@ def training_loop(
               model_grad['params']['extractor'])
           graph_model_grad_norm = tree_utils.global_norm(
               model_grad['params']['graph_classifier'])
+
+          if jnp.isnan(agent_model_grad_norm) or jnp.isnan(graph_model_grad_norm):
+            warnings.warn('Gradients are NaN.', RuntimeWarning)
 
           if use_wandb:
             wandb.log({

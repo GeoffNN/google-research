@@ -181,11 +181,11 @@ class ClassificationPipeline(nn.Module):
     # Should we pass the node weights through a nonlinearity?
     # Commented lines below reflect these WIP possibilities.
     logits = self.graph_classifier(
-        node_features=node_features,
+        node_features=node_features[..., :-1], # Remove node_ids from node features.
         node_ids=node_ids,
         adjacency_mat=jnp.where(dense_submat[Ellipsis, jnp.newaxis] != 0, 1., 0.),  # TODO: Try without where using the true values?
         # adjacency_mat=dense_submat[..., jnp.newaxis],
-        qstar=dense_q / dense_q.std(),  # Normalizing for scale: this seems to work best
+        qstar=dense_q / (dense_q.std() + 1e-8),  # Normalizing for scale: this seems to work best
         # qstar=10 * (dense_q**2)**(1. / 8),  # normalizing for scale
     )
 

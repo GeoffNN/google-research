@@ -214,7 +214,7 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
         self.config.embedding_dim,
         name="Node feature embedding")
     self.node_id_embedding = nn.Embed(
-      self.config.max_graph_size,
+      self.config.max_graph_size + 1,  # +1 to account for the out of bounds node
       self.config.embedding_dim
     )
     self.relation_embedding = nn.Embed(
@@ -303,7 +303,7 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
     # TODO: normalize neighbor_logits and exploration bonus to be on the same scale
     # Or keep running mean/std of each and normalize?
     # return neighbor_logits + self.config.exploration_bonus_weight * exploration_bonus
-    return exploration_bonus
+    return neighbor_logits
 
 
 class GeneralizedMultiplicativeAgentModel(nn.Module, Agent):
