@@ -39,12 +39,12 @@ def main(*args):
 
         batch_sizes = [32]
         max_subgraph_sizes = [400] #, 200, 500]
-        curiosity_weights = [.1, 0.]
-        label_weights = [0., 1.]
-        entropy_weights = [10., 0.]
+        curiosity_weights = [1., 0.]
+        label_weights = [1.]
+        entropy_weights = [1., 0.]
         learning_rates = [5e-4]
         alphas = [2e-5]
-        rhos = [0.]
+        rhos = [0., 1e-4]
         ridges = [1e-7]
 
         resolution = 32

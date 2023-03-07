@@ -47,6 +47,7 @@ class ClassificationPipelineConfig:
   supernode: bool = False
   use_node_weights: bool = True
   curiosity_weight: float = 0.
+  exploration_weight: float = 0.
   entropy_weight: float = 0.
   label_weight: float = 1.
 
@@ -136,8 +137,8 @@ class ClassificationPipeline(nn.Module):
   def entropy_loss_fun(self, q):
     """Computes entropy loss."""
     # Normalize q so it's a probability, and compute entropy
-    entropy = jax.scipy.special.entr(q / sum(q)).sum()
-    max_entropy = -jnp.log(1 / q.shape[0])  # Uniform weights on the support of q
+    entropy = jax.scipy.special.entr(q / (sum(q) + 1e-8)).sum()
+    max_entropy = jnp.log(q.shape[0])  # Uniform weights on the support of q
     entropy_loss = max_entropy - entropy
     return entropy_loss
 
@@ -165,7 +166,7 @@ class ClassificationPipeline(nn.Module):
         for visualization purposes.
     """
     (dense_q, node_features, node_ids, dense_submat, q, adjacency_matrix,
-     error) = self.extractor(start_node_id, graph)
+     error, exploration_bonus) = self.extractor(start_node_id, graph)
 
     del adjacency_matrix
     del error
@@ -189,7 +190,7 @@ class ClassificationPipeline(nn.Module):
         # qstar=10 * (dense_q**2)**(1. / 8),  # normalizing for scale
     )
 
-    return logits, (q, dense_submat, node_ids, dense_q)
+    return logits, (q, dense_submat, node_ids, dense_q, exploration_bonus.sum())
 
   @functools.partial(
       nn.vmap,
@@ -214,11 +215,12 @@ class ClassificationPipeline(nn.Module):
     """
     # Extract subgraph and associated features
     cfg = self.config
-    logits, (q, dense_submat, node_ids, dense_q) = self(graphs, start_node_ids)
+    logits, (q, dense_submat, node_ids, dense_q, exploration_bonus) = self(graphs, start_node_ids)
     preds = self.pred_fun(logits)
     label_loss = self.loss_fun(logits, labels)
     curiosity_loss = self.curiosity_loss_fun(graphs.image, dense_q, node_ids, graphs) if cfg.curiosity_weight > 0. else 0.
     # Add entropy term to deconcentrate the weights
     entropy_loss = self.entropy_loss_fun(dense_q)
     loss_vals = cfg.label_weight * label_loss + cfg.curiosity_weight * curiosity_loss + cfg.entropy_weight * entropy_loss
-    return loss_vals, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss)
+    loss_vals += cfg.exploration_weight * exploration_bonus
+    return loss_vals, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss, exploration_bonus)

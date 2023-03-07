@@ -67,7 +67,7 @@ flags.DEFINE_enum('pathfinder_difficulty', 'easy', ['easy', 'hard'],
 flags.DEFINE_integer('pathfinder_resolution', 32,
                      'Resolution for the pathfinder task.')
 flags.DEFINE_integer('batch_size', 128, 'Training batch size')
-flags.DEFINE_integer('log_freq', 50,
+flags.DEFINE_integer('log_freq', 10,
                      'Log batch accuracy and loss every log_freq iterations.')
 flags.DEFINE_integer('plot_freq', 100,
                      'Log image plots for a random train examples and first val points for each class every plot_freq iterations.')
@@ -136,6 +136,10 @@ flags.DEFINE_float(
 flags.DEFINE_float(
   'label_weight', 1., 'Weight for supervised loss function.'
 )
+flags.DEFINE_float(
+  'exploration_loss_weight', 1., 'Weight for exploration bonus from RND.'
+)
+
 flags.DEFINE_integer(
   'pure_exploration_steps', 300, 'Number of epochs before adding in the label loss'
 )
@@ -181,6 +185,7 @@ def training_loop(
     exploration_steps=2000,
     exploration_bonus_weight=0.,
     curiosity_weight=0.,
+    exploration_loss_weight=0.,
     entropy_weight=0.,
     label_weight=1.,
     supernode=False,
@@ -290,7 +295,7 @@ def training_loop(
 
   # TODO(gnegiar): Define configs outside of training loop, and pass as args.
   agent_config = agents.AgentConfig(graph_parameters, max_graph_size, agent_hidden_dim,
-                                    agent_hidden_dim)
+                                    agent_hidden_dim, exploration_bonus_weight)
 
   extractor_config = subgraph_extractors.ExtractorConfig(
       max_graph_size, max_subgraph_size, rho, alpha, num_steps_extractor, extractor_tol,
@@ -312,6 +317,7 @@ def training_loop(
     graph_classifier_config,
     curiosity_weight=curiosity_weight,
     entropy_weight=entropy_weight,
+    exploration_weight=exploration_loss_weight,
     label_weight=label_weight if exploration_steps < 1 else 0.)
 
   eval_config = pipeline.ClassificationPipelineConfig(
@@ -323,14 +329,14 @@ def training_loop(
   # Define loss over the full model.
   def forward(params, graphs, start_node_ids, labels, config, rng=None):
     model = pipeline.ClassificationPipeline(config)
-    loss_vals, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss) = model.apply(
+    loss_vals, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss, exploration_bonus) = model.apply(
         params,
         graphs,
         start_node_ids,
         labels,
         rngs={'dropout': rng} if rng is not None else None,
         method=model.compute_loss)
-    return loss_vals.mean(0), (preds, logits, q, dense_submat, label_loss.mean(0), curiosity_loss.mean(0), entropy_loss.mean(0))
+    return loss_vals.mean(0), (preds, logits, q, dense_submat, label_loss.mean(0), curiosity_loss.mean(0), entropy_loss.mean(0), exploration_bonus.mean(0))
 
   test_forward = jax.jit(functools.partial(forward, config=eval_config))
 
@@ -404,6 +410,7 @@ def training_loop(
         train_config = pipeline.ClassificationPipelineConfig(
           extractor_config,
           graph_classifier_config,
+          exploration_weight=exploration_loss_weight,
           curiosity_weight=curiosity_weight,
           entropy_weight=entropy_weight,
           label_weight=label_weight)
@@ -421,17 +428,18 @@ def training_loop(
         train_config = pipeline.ClassificationPipelineConfig(
           extractor_config.replace(agent_config=agent_config.replace(exploration_bonus_weight=0.)),
           graph_classifier_config,
+          exploration_weight=0.,
           curiosity_weight=0.,
           entropy_weight=0.,
           label_weight=label_weight)
 
-        if not updated_after_pure_exploration:
+        if not updated_after_exploration:
           # Update the value and grad function
           # Avoids jitting at each step after pure exploration has ended
           value_grad_loss_fn = jax.value_and_grad(
               functools.partial(forward, config=train_config), has_aux=True)
           value_grad_loss_fn = jax.jit(value_grad_loss_fn)
-          updated_after_pure_exploration = True
+          updated_after_exploration = True
         
       data, labels = batch
       # TODO(gnegiar): build the graphs once before hand, in the dataloading
@@ -446,7 +454,7 @@ def training_loop(
       # Use the results inside a JAX implicit differentiation construction.
       rng_it, rng = jax.random.split(rng)
 
-      (loss, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss)), model_grad = value_grad_loss_fn(
+      (loss, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss, exploration_bonus)), model_grad = value_grad_loss_fn(
           model_state,
           graphs,
           graphs.sample_start_node_id(),
@@ -483,6 +491,7 @@ def training_loop(
               'accuracy': batch_accuracy,
               'graph_model_grad_norm': graph_model_grad_norm,
               'agent_model_grad_norm': agent_model_grad_norm,
+              'exploration bonus': exploration_bonus
             })
           
           else:
@@ -491,7 +500,7 @@ def training_loop(
               tf.summary.scalar('loss_label', label_loss, step=step)
               tf.summary.scalar('loss_curiosity', curiosity_loss, step=step)
               tf.summary.scalar('loss_entropy', entropy_loss, step=step)
-
+              tf.summary.scalar('exploration_bonus', exploration_bonus, step=step)
               tf.summary.scalar('accuracy', batch_accuracy, step=step)
               tf.summary.scalar(
                   'graph_model_grad_norm', graph_model_grad_norm, step=step)
@@ -501,7 +510,7 @@ def training_loop(
         if step % plot_freq == 0:
 
           # Plot subgraph on first test datapoint of each class
-          loss_rep, (preds_rep, logits_rep, q_rep, dense_submat_rep, label_loss, curiosity_loss, entropy_loss) = test_forward(
+          loss_rep, (preds_rep, logits_rep, q_rep, dense_submat_rep, label_loss, curiosity_loss, entropy_loss, exploration_bonus) = test_forward(
               model_state, test_representatives_graphs,
               test_representatives_graphs.sample_start_node_id(), rep_labels,
               )
@@ -629,7 +638,7 @@ def training_loop(
 
         t0 = time.time()
         loss_test, (preds, logits,
-                    q, dense_submat_test, label_loss_test, curiosity_loss_test, entropy_loss_test) = test_forward(model_state, graphs_test,
+                    q, dense_submat_test, label_loss_test, curiosity_loss_test, entropy_loss_test, exploration_bonus_test) = test_forward(model_state, graphs_test,
                                       graphs_test.sample_start_node_id(),
                                       labels_test)
         loss_test.block_until_ready()
@@ -649,7 +658,8 @@ def training_loop(
           "test accuracy": test_accuracy_value,
           "test loss": loss_test,
           "test curiosity loss": curiosity_loss_test,
-          "test entropy loss": entropy_loss_test
+          "test entropy loss": entropy_loss_test,
+          "test exploration bonus": exploration_bonus_test
         })
 
       else:
@@ -661,6 +671,7 @@ def training_loop(
             tf.summary.scalar('loss_label', label_loss_test, step=step)
             tf.summary.scalar('loss_curiosity', curiosity_loss_test, step=step)
             tf.summary.scalar('loss_entropy', entropy_loss_test, step=step)
+            tf.summary.scalar('exploration_bonus', exploration_bonus_test, step=step)
 
       # Reset metric for next epoch.
       test_accuracy.reset_state()
@@ -732,6 +743,7 @@ def main(argv):
       exploration_bonus_weight=FLAGS.exploration_bonus_weight,
       exploration_steps=FLAGS.exploration_steps,
       curiosity_weight=FLAGS.curiosity_weight,
+      exploration_loss_weight=FLAGS.exploration_loss_weight,
       entropy_weight=FLAGS.entropy_weight,
       label_weight=FLAGS.label_weight,
       supernode=FLAGS.supernode,
