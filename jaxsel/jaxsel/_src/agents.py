@@ -116,7 +116,7 @@ class Agent(abc.ABC):
           graph.outgoing_neighbors_and_features(cur_id))
       num_neighbors = neighbor_ids.shape[0]
       node_features = jnp.tile(graph.node_features(cur_id), [num_neighbors, 1])
-      neighbor_logits = self(None, node_features, neighbor_relations,
+      neighbor_logits, exploration_bonus = self(None, node_features, neighbor_relations,
                              neighbor_features)
 
       # Sample neighbor with Gumbel-max.
@@ -139,13 +139,13 @@ class Agent(abc.ABC):
         graph.outgoing_neighbors_and_features(node_ids))
     num_neighbors = neighbor_ids.shape[0]
     node_features = jnp.tile(graph.node_features(node_ids), [num_neighbors, 1])
-    logits = self(graph.task_features(), node_features, neighbor_relations,
+    logits, exploration_bonus = self(graph.task_features(), node_features, neighbor_relations,
                   neighbor_features)
     probs = jax.nn.softmax(logits)
     sparse_rows = jsparse.BCOO(
         (probs, _make_adjacency_mat_row_indices(node_ids, neighbor_ids)),
         shape=(max_graph_size, max_graph_size))
-    return sparse_rows
+    return sparse_rows, exploration_bonus
 
   def fill_sparse_adjacency_matrix(self, q,
                                    graph):
@@ -163,6 +163,7 @@ class Agent(abc.ABC):
     Returns:
       sparse_adjacency_submat: A sparse representation of the adjacency matrix
         where each edge starts from a node with non zero weight in `q`.
+      exploration_bonus: Loss term encoding the level of surprise of the neighbor nodes.
     """
     # TODO(gnegiar): use XOR on boolean mask from q_new and q_old
     # Also check if q_data is nonzero
@@ -172,9 +173,10 @@ class Agent(abc.ABC):
     # multiple nodes. In that case, it will appear twice in q's sparse repr.
     q = q.sum_duplicates(q.nse)
     node_ids = q.indices.flatten()
-    adjacency_matrix = self._fill_rows_of_sparse_adjacency_matrix(
-        node_ids, graph, q.shape[0]).sum(0)
-    return adjacency_matrix.sum_duplicates(adjacency_matrix.nse)
+    adjacency_matrix, exploration_bonus = self._fill_rows_of_sparse_adjacency_matrix(
+        node_ids, graph, q.shape[0])
+    adjacency_matrix = adjacency_matrix.sum(0)
+    return adjacency_matrix.sum_duplicates(adjacency_matrix.nse), exploration_bonus
 
 
 ########################
@@ -241,6 +243,22 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
     self.relation_hidden_sum = nn.Dense(
         self.config.hidden_dim, name="Relation hidden layer sum")
 
+    self.predictor_net = nn.Sequential([
+      nn.Dense(self.config.hidden_dim, kernel_init=nn.initializers.glorot_normal()),
+      nn.relu,
+      nn.Dense(self.config.hidden_dim, kernel_init=nn.initializers.glorot_normal()),
+      nn.relu,
+      nn.Dense(self.config.hidden_dim, kernel_init=nn.initializers.glorot_normal()),
+    ])
+
+    self.target_random_net = nn.Sequential([
+      nn.Dense(self.config.hidden_dim, kernel_init=nn.initializers.glorot_uniform()),
+      nn.relu,
+      nn.Dense(self.config.hidden_dim, kernel_init=nn.initializers.glorot_uniform()),
+      nn.relu,
+      nn.Dense(self.config.hidden_dim, kernel_init=nn.initializers.glorot_uniform()),
+    ])
+
     self.output_layer = nn.Dense(1, name="Output layer")
 
   def __call__(self, task_features, node_features_cat, neighbor_relations,
@@ -299,12 +317,16 @@ class SimpleFiLMedAgentModel(nn.Module, Agent):
     neighbor_logits = self.output_layer(mixed_representation).squeeze(-1)
 
     # Add a bonus towards foreground pixels (which have high values)
-    exploration_bonus = neighbor_features_cat.reshape(num_neighbors, -1).sum(-1)
+    exploration_bonus = neighbor_features_cat
+    exploration_bonus = ((self.predictor_net(mixed_representation) - jax.lax.stop_gradient(self.target_random_net(mixed_representation))) ** 2)
     # TODO: normalize neighbor_logits and exploration bonus to be on the same scale
     # Or keep running mean/std of each and normalize?
-    # return neighbor_logits + self.config.exploration_bonus_weight * exploration_bonus
-    return neighbor_logits
-
+    exploration_bonus = exploration_bonus.reshape(num_neighbors, -1)
+    # Normalize
+    # exploration_bonus = (exploration_bonus - exploration_bonus.mean(0)) / (exploration_bonus.std(0) + 1e-8)
+    # neighbor_logits = (neighbor_logits - neighbor_logits.mean()) / (neighbor_logits.std() + 1e-8)
+    return neighbor_logits + self.config.exploration_bonus_weight * exploration_bonus.sum(-1), exploration_bonus.sum()
+    # return exploration_bonus.sum(-1), exploration_bonus.sum()
 
 class GeneralizedMultiplicativeAgentModel(nn.Module, Agent):
   """An agent mixing task, node, relation and neighbor embeddings.
