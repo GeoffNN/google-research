@@ -155,7 +155,7 @@ class SparseISTAExtractor(nn.Module):
     def body_fun(mdl, carry):
       step, q, q_prev = carry
       del q_prev
-      adjacency_matrix = mdl.agent.fill_sparse_adjacency_matrix(q, graph)
+      adjacency_matrix, exploration_bonus = mdl.agent.fill_sparse_adjacency_matrix(q, graph)
       q_next = self._ista_step(q, adjacency_matrix, s)
       return step + 1, q_next, q
 
@@ -203,7 +203,7 @@ class SparseISTAExtractor(nn.Module):
 
     # TODO(gnegiar): Find a way to avoid re-filling adjacency_matrix
     # For now, this allows to propagate gradients back to the `agent` model
-    adjacency_matrix = self.agent.fill_sparse_adjacency_matrix(q, graph)
+    adjacency_matrix, exploration_bonus = self.agent.fill_sparse_adjacency_matrix(q, graph)
     # Extract dense submatrix
     dense_q = self._make_dense_vector(q, q.indices.flatten())
     dense_s = self._make_dense_vector(s, q.indices.flatten())
@@ -251,7 +251,7 @@ class SparseISTAExtractor(nn.Module):
     node_ids = q.indices.flatten()
 
     error = self._error(q_star, dense_submat, dense_s)
-    return q_star, node_features, node_ids, dense_submat, q, adjacency_matrix, error
+    return q_star, node_features, node_ids, dense_submat, q, adjacency_matrix, error, exploration_bonus
 
 
 # Utility functions
