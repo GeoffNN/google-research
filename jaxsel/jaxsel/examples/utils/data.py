@@ -18,6 +18,8 @@
 import functools
 from typing import Tuple, Sequence
 
+import matplotlib.pyplot as plt
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,6 +29,7 @@ import tensorflow_datasets as tfds
 
 from jaxsel._src import image_graph
 from jaxsel.examples.utils import pathfinder_data
+
 
 
 def normalize_img(image, label):
@@ -140,6 +143,129 @@ def make_graph_mnist(
       patch_size=patch_size)
 
 
+# TODO(gnegiar): Allow multiple start nodes.
+def _get_start_pixel_fn_pathfinder(
+    image, nbins, thresh = .5):
+  """Detects a probable start point in a Pathfinder image example."""
+  thresh_image = jnp.where(image > thresh * nbins, 1, 0)
+  distance = ndi.distance_transform_edt(thresh_image)
+  idx = distance.argmax()
+  coords = np.unravel_index(idx, thresh_image.shape)
+  return coords
+
+def _get_end_pixel_fn_pathfinder(
+    image, nbins, thresh = .5):
+  """Detects a probable start point in a Pathfinder image example."""
+  thresh_image = jnp.where(image > thresh * nbins, 1, 0)
+  distance = ndi.distance_transform_edt(thresh_image)
+  idx = np.argpartition(distance.flatten(), -1)[-1]
+  coords = np.unravel_index(idx, thresh_image.shape)
+  return coords
+
+  
+def cut_patch(image, coords, h):
+    """Returns a patch of size 2h+1 around coords from image."""
+    x, y = coords
+    patch = image[x-h:x+h+1, y-h:y+h+1].copy()
+    image[x-h:x+h+1, y-h:y+h+1] = 0
+    return patch
+
+def clip_coords(coords, h, shape):
+    """Clips coords so that the h-sized patch around coords is within shape."""
+    x, y = coords
+    x = np.clip(x, h, shape[0] - h - 2)
+    y = np.clip(y, h, shape[1] - h - 2)
+    return x, y
+
+def move_endpoint_to_random_location_near_startpoint(image, start_coord, end_coords, h, max_dist=20):
+    """Moves the endpoint patch to a random location in the image."""
+    # Sample random location near startpoint
+    dist = max_dist + 1
+    while dist > max_dist or dist < 3:
+        random_flat_idx = np.random.randint(0, image.shape[0] * image.shape[1])
+        rnd_coords = np.unravel_index(random_flat_idx, image.shape)
+        rnd_coords = clip_coords(rnd_coords, h, image.shape)
+        dist = np.linalg.norm(np.array(start_coord) - np.array(rnd_coords), ord=1)
+
+    # Cut patch 
+    image_copy = image.copy()
+    end_coords = clip_coords(end_coords, h, image.shape)
+    patch = cut_patch(image_copy, end_coords, h)
+    
+    # and paste it at random location
+    image_copy[rnd_coords[0] -h: rnd_coords[0] + h+1, rnd_coords[1] - h: rnd_coords[1] + h+1] = patch
+    return image_copy, rnd_coords
+
+def create_random_line_between_points(start_point, end_point, shape):
+    """
+    Creates a dashed line between start_point and end_point.
+    """
+    # Sample the start point of the curve
+    points = []
+    start_point, end_point = map(np.array, (start_point, end_point))
+    cur_point = start_point.astype(float)
+    momentum = 2 * np.random.randn(2)
+
+    step = 1
+    while not np.all(np.abs(cur_point - end_point) < 1):
+      # Use the same grad for multiple steps to make the line flatter?
+      grad = np.sign(end_point - cur_point)
+      momentum = .8 * momentum + .2 * grad / np.sqrt(step)
+      momentum_norm = np.sum(np.abs(momentum))
+      cur_point = cur_point + momentum / (1.2 * momentum_norm)
+
+      # clip to image
+      cur_point = np.clip(cur_point, 0, np.array(shape) - 1)
+
+      points.append(np.round(cur_point).astype(int))
+      step += 1
+    return np.stack(points)
+
+def add_dashed_line_to_image(image, points, dash_length):
+    """Adds a dashed line to image following the given point coordinates."""
+    image_copy = image.copy()
+    for k, point in enumerate(points):
+        if k % (2 * dash_length) < dash_length:
+            xs = np.arange(np.clip(point[0] - 1, 0, image.shape[0] - 1),
+                       np.clip(point[0] + 1, 0, image.shape[0]))
+            ys = np.arange(np.clip(point[1] - 1, 0, image.shape[1] - 1),
+                        np.clip(point[1] + 1, 0, image.shape[1]))
+            # Debug case when xs or ys are empty
+            if len(ys) == 0 or len(xs) == 0:
+                print(point)
+            image_copy[min(xs):max(xs) + 1, min(ys):max(ys) + 1] = np.random.uniform(0.5, 0.8, size=(len(xs), len(ys))
+              ).reshape(
+                image_copy[min(xs):max(xs) + 1, min(ys):max(ys) + 1].shape)
+    return image_copy
+
+
+def batch_with_random_endpoint(data, labels, bins, h=3, max_dist=20, probability=0.5, thresh=0.5):
+    """Augments a batch of images with a random endpoint with given probability."""
+    images = []
+    new_labels = []
+    nbins = len(bins)
+    for i in range(data.shape[0]):
+        if np.random.rand() > probability:
+          images.append(data[i].squeeze())
+          new_labels.append(labels[i])
+        else:
+          binned_image = np.digitize(data[i], bins)
+          start_coords = _get_start_pixel_fn_pathfinder(binned_image.squeeze(), nbins, thresh=thresh)
+          end_coords = _get_end_pixel_fn_pathfinder(binned_image.squeeze(), nbins, thresh) 
+          image_with_new_endpoints, new_end_coords = move_endpoint_to_random_location_near_startpoint(data[i].squeeze(), start_coords, end_coords, h, max_dist=max_dist)
+
+          if labels[i] == 1:
+            # Add a dashed line between the start and end points
+            points_on_line = create_random_line_between_points(start_coords, new_end_coords, data[i].squeeze().shape)
+            # TODO: Figure out how dash_length changes with resolution
+            image_with_new_endpoints = add_dashed_line_to_image(image_with_new_endpoints, points_on_line, dash_length=8)
+            # save image to a new file
+            # increment the file name
+          images.append(image_with_new_endpoints)
+             
+    return np.stack(images)[..., None], np.array(labels)
+
+
 # TODO(gnegiar): Map this on the dataset, and cache it.
 def make_graph_pathfinder(
     image,
@@ -158,21 +284,11 @@ def make_graph_pathfinder(
     graph representing the image.
   """
 
-  # TODO(gnegiar): Allow multiple start nodes.
-  def _get_start_pixel_fn(
-      image, thresh = .5 * len(bins)):
-    """Detects a probable start point in a Pathfinder image example."""
-    thresh_image = jnp.where(image > thresh, 1, 0)
-    distance = ndi.distance_transform_edt(thresh_image)
-    idx = distance.argmax()
-    coords = np.unravel_index(idx, thresh_image.shape)
-    return coords
-
   # TODO(gnegiar): Allow continuous features in models.
   return image_graph.ImageGraph.create(
       jnp.digitize(image, bins).squeeze(),
       # Set thresh to .5 by leveraging the image discretization.
       get_start_pixel_fn=functools.partial(
-          _get_start_pixel_fn, thresh=.5 * len(bins)),
+          _get_start_pixel_fn_pathfinder, nbins=len(bins), thresh=.5),
       num_colors=len(bins),  # number of bins + 'out of bounds' pixel
       patch_size=patch_size)

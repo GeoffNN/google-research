@@ -137,14 +137,14 @@ flags.DEFINE_float(
   'label_weight', 1., 'Weight for supervised loss function.'
 )
 flags.DEFINE_float(
-  'exploration_loss_weight', 1., 'Weight for exploration bonus from RND.'
+  'exploration_loss_weight', 0., 'Weight for exploration bonus from RND.'
 )
 
 flags.DEFINE_integer(
-  'pure_exploration_steps', 300, 'Number of epochs before adding in the label loss'
+  'pure_exploration_steps', 0, 'Number of epochs before adding in the label loss'
 )
 flags.DEFINE_integer(
-  'exploration_steps', 1000, 'Number of epochs for using the exploration bonus in the Agent model and the curiosity/entropy loss terms.'
+  'exploration_steps', 0, 'Number of epochs for using the exploration bonus in the Agent model and the curiosity/entropy loss terms.'
 )
 flags.DEFINE_float(
   'exploration_bonus_weight', 0., "Exploration bonus in the Agent model: we add a bonus in the transition probabilities."
@@ -442,6 +442,10 @@ def training_loop(
           updated_after_exploration = True
         
       data, labels = batch
+
+      # Data augmentation to shorten the distance between endpoints.
+      data, labels = data_utils.batch_with_random_endpoint(data, labels, bins, 3, max_dist=18, probability=.5, thresh=0.5)
+
       # TODO(gnegiar): build the graphs once before hand, in the dataloading
       # Make graphs from the batch of images
 
