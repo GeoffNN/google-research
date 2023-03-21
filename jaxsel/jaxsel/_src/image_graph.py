@@ -266,6 +266,7 @@ class PatchImageGraph(graph_api.GraphAPI):
 
   image: np.ndarray
   _start_node_id: int
+  _start_node_pixel_coords: np.ndarray
 
   image_shape: Tuple[int, int] = flax.struct.field(pytree_node=False)
   patch_image_shape: Tuple[int, int] = flax.struct.field(pytree_node=False)
@@ -291,6 +292,20 @@ class PatchImageGraph(graph_api.GraphAPI):
       Patch coordinates.
     """
     return (jnp.array(pixel_coords) // jnp.array([patch_size, patch_size])).astype(int)
+
+  @staticmethod
+  def _patch_coords_to_pixel_coords(patch_coords: jnp.array, patch_size: int):
+    """Converts patch coordinates to pixel coordinates.
+
+    Args:
+      patch_coords: Patch coordinates to convert.
+      patch_size: Size of the patches.
+
+    Returns:
+      Pixel coordinates.
+    """
+    radius = patch_size // 2 + 1
+    return (jnp.patch_coords * radius).astype(int)
 
 
   def sample_start_node_id(self, seed=0):
@@ -349,10 +364,12 @@ class PatchImageGraph(graph_api.GraphAPI):
     patch_sizes = jnp.array([patch_size, patch_size])
     image = jnp.pad(image, 
                       jnp.vstack([jnp.ceil(jnp.array(image.shape) / patch_sizes) * patch_sizes - jnp.array(image.shape), jnp.zeros(2)]).T.astype(int),
-                      mode='constant')
+                      mode='constant',
+                      constant_values=padding_value)
 
     patch_image_shape = jnp.array(image.shape) // patch_sizes
-    start_node_id = np.ravel_multi_index(PatchImageGraph._pixel_coords_to_patch_coords(get_start_pixel_fn(image), patch_size), patch_image_shape)
+    start_node_pixel_coords = get_start_pixel_fn(image)
+    start_node_id = np.ravel_multi_index(PatchImageGraph._pixel_coords_to_patch_coords(start_node_pixel_coords, patch_size), patch_image_shape)
 
     return PatchImageGraph(
         image=image,
@@ -362,9 +379,10 @@ class PatchImageGraph(graph_api.GraphAPI):
         padding_value=padding_value,
         window_size=window_size,
         _start_node_id=start_node_id,
+        _start_node_pixel_coords=start_node_pixel_coords,
         _num_colors=num_colors)
 
-  def node_metadata(self, node_id):
+  def node_metadata(self, node_id: int):
     return {'coordinates': self._patch_id_to_coordinates(node_id)}
   
   def node_patch(self, node_id):
@@ -377,7 +395,7 @@ class PatchImageGraph(graph_api.GraphAPI):
     patch = _get_window(center_pixel_coordinates, self.image, self.window_size, padding_value=self.padding_value)
     return patch
   
-  def node_features(self, node_id):
+  def node_features(self, node_id: int):
     return jnp.concatenate([self.node_patch(node_id), jnp.array([node_id])], axis=None)
   
   def graph_parameters(self):
@@ -390,12 +408,11 @@ class PatchImageGraph(graph_api.GraphAPI):
         task_feature_dim=self.patch_size**2,
         task_feature_kind=graph_api.NodeFeatureKind.CATEGORICAL)
 
-
-  def _outgoing_edges_out_of_bounds_pixel(self, node_id, relation_ids):
+  def _outgoing_edges_out_of_bounds_pixel(self, node_id: int, relation_ids):
     del node_id
     return jnp.full_like(relation_ids, self._start_node_id)
 
-  def _outgoing_edges_in_bounds_pixel(self, node_id, relation_ids):
+  def _outgoing_edges_in_bounds_pixel(self, node_id: int, relation_ids):
     """Returns the outgoing edges from `node_id`.
 
     Patches outside of the image are mapped to node_id -1.
@@ -428,7 +445,7 @@ class PatchImageGraph(graph_api.GraphAPI):
     neighbor_ids = jax.vmap(self._patch_coordinates_to_id)(neighbor_coordinates)
     return neighbor_ids
 
-  def outgoing_edges(self, node_id):
+  def outgoing_edges(self, node_id: int):
     """Returns the outgoing edges from `node_id`.
 
     Pixels outside of the image are mapped to node_id -1.
@@ -451,7 +468,6 @@ class PatchImageGraph(graph_api.GraphAPI):
         None)
 
     return relation_ids, neighbor_ids
-
   
   @property
   def start_node_coords(self):

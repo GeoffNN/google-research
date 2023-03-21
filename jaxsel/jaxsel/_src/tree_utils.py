@@ -31,7 +31,7 @@ def global_norm(tree):
   return jnp.sqrt(jax.tree_util.tree_reduce(lambda x, y: x + y, leaf_norms2, 0))
 
 
-@jax.jit
+# @jax.jit
 def tree_stack(trees):
   """Takes a list of trees and stacks every corresponding leaf.
 

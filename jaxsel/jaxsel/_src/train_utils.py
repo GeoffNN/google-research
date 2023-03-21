@@ -71,7 +71,7 @@ def get_first_class_representatives(
 EPS = 1e-8
 
 def plot_subgraph(img, q, label,
-                  start_node_coords):
+                  start_node_coords, vmax=.1, max_alpha=1, patch_size=1):
   """Returns a figure with an image with overlaid selected pixels.
 
   The figure will have img in the background. We plot q pixel by pixel over img,
@@ -87,30 +87,44 @@ def plot_subgraph(img, q, label,
       contain the weights over the pixels.
     label: predicted label
     start_node_coords: coordinates of the start node.
+    xmax: maximum value of q to use for color.
+    patch_size: size of the patch which the node corresponds to. Use 1 for pixel graphs.
 
   Returns:
     figure: a matplotlib figure with the promised plot.
   """
-  figure = plt.figure(figsize=(2, 2))
+  figure = plt.figure(figsize=(5, 5))
   ax = plt.gca()
   graph_size = img.size
+  if patch_size>1:
+    # The q weights correspond to patches, not pixels.
+    graph_size = img.size // (patch_size ** 2)
   weighting = q.todense()[:graph_size]
+  if patch_size>1:
+    # Expand the weights to the size of the patch.
+    patch_image_size = jnp.array(img.shape) // patch_size
+    weighting = weighting.reshape(*patch_image_size)
+    weighting = jnp.repeat(weighting, patch_size, axis=0)
+    weighting = jnp.repeat(weighting, patch_size, axis=1)
   weighting = weighting.reshape(img.shape)
-  # TODO(gnegiar): Understand why some weights are < 0.
-  # This may be due to the directed graph property.
-  # Should we clip the weights to >0?
+  
   norm_weighting = abs(weighting) / (EPS + abs(weighting).max())
+
   ax.set_title(f'Pred: {label}')
   ax.imshow(img, cmap='gray_r', vmin=0., vmax=1.)
-  ax.imshow(weighting, alpha=norm_weighting.clip(0., 1.), cmap='YlOrRd', vmax=.1)
+  ax.imshow(weighting, alpha=norm_weighting.clip(0., 1.) * max_alpha, cmap='YlOrRd', vmax=vmax)
+
+  # Add contour
   ax.contour(
       jnp.where(weighting != 0., 1., 0.),
       levels=0,  # Catch all positive weights
       colors='red',
       linewidths=4.,
       antialiased=True)
+  
   circle = plot_patches.Circle(
       start_node_coords[::-1], 2, fill=False, color='cyan')
+  
   ax.add_patch(circle)
   ax.axis('off')
   return figure
@@ -119,7 +133,7 @@ def plot_subgraph(img, q, label,
 # TODO(gnegiar): Refactor to use above function
 def plot_subgraph_classes(imgs, qs, labels,
                           start_nodes_coords,
-                          num_classes):
+                          num_classes, vmax=.1, max_alpha=1, patch_size=1):
   """Plots examples of each class, with subgraphs."""
   fig, axs = plt.subplots(2, num_classes // 2, figsize=(num_classes, 4))
   qs = [
@@ -132,15 +146,24 @@ def plot_subgraph_classes(imgs, qs, labels,
                                                   labels, start_nodes_coords):
     # Plot digit
     img = img.squeeze()
-    ax.imshow(img, cmap='gray_r', vmin=0., vmax=1.)
-    ax.set_title(f'Pred: {label}')
     # Prep subgraph weighting
     graph_size = img.size
+    if patch_size>1:
+      # The q weights correspond to patches, not pixels.
+      graph_size = img.size // (patch_size ** 2)
     weighting = q.todense()[:graph_size]
+    if patch_size>1:
+      # Expand the weights to the size of the patch.
+      patch_image_size = jnp.array(img.shape) // patch_size
+      weighting = weighting.reshape(*patch_image_size)
+      weighting = jnp.repeat(weighting, patch_size, axis=0)
+      weighting = jnp.repeat(weighting, patch_size, axis=1)
     weighting = weighting.reshape(img.shape)
     norm_weighting = abs(weighting) / (EPS + abs(weighting).max())
+    ax.imshow(img, cmap='gray_r', vmin=0., vmax=1.)
+    ax.set_title(f'Pred: {label}')
     # Plot subgraph
-    ax.imshow(weighting, alpha=norm_weighting.clip(0., 1.), cmap='YlOrRd', vmax=.1)
+    ax.imshow(weighting, alpha=norm_weighting.clip(0., 1.) * max_alpha, cmap='YlOrRd', vmax=vmax)
     ax.contour(
         jnp.where(weighting != 0., 1., 0.),
         levels=0,  # Catch all nonzero weights

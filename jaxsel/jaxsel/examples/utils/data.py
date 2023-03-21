@@ -271,6 +271,7 @@ def make_graph_pathfinder(
     image,
     patch_size,
     bins,
+    patches=True
 ):
   """Makes a graph holding a pathfinder image.
 
@@ -279,16 +280,18 @@ def make_graph_pathfinder(
     patch_size: size of patches for node features.
     bins: Used for binning the pixel values. The highest bin must be greater
       than the highest value in image.
+    patches: If True, use patches as node features. Otherwise, use pixel values.
 
   Returns:
     graph representing the image.
   """
-
   # TODO(gnegiar): Allow continuous features in models.
-  return image_graph.ImageGraph.create(
+  graph_class = image_graph.PatchImageGraph if patches else image_graph.ImageGraph
+  return graph_class.create(
       jnp.digitize(image, bins).squeeze(),
       # Set thresh to .5 by leveraging the image discretization.
       get_start_pixel_fn=functools.partial(
           _get_start_pixel_fn_pathfinder, nbins=len(bins), thresh=.5),
       num_colors=len(bins),  # number of bins + 'out of bounds' pixel
-      patch_size=patch_size)
+      patch_size=patch_size,
+      padding_value=1)

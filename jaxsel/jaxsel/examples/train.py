@@ -43,7 +43,7 @@ import optax
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-import tqdm
+from tqdm import tqdm
 
 import shortuuid
 
@@ -155,6 +155,8 @@ flags.DEFINE_integer('seed', 0, 'Seed for the random number generator.')
 flags.DEFINE_bool('wandb', True, help="Use wandb for logging.")
 
 metrics = tf.keras.metrics
+
+jax.config.update('jax_traceback_filtering', 'off')
 
 
 def training_loop(
@@ -350,6 +352,7 @@ def training_loop(
       test_dataset, num_classes)
   test_rep_images, _ = zip(*test_representatives)
   test_representatives_graphs = make_graphs(jnp.stack(test_rep_images), patch_size, bins)
+  test_rep_images = test_representatives_graphs.image / len(bins)
       
   rep_labels = np.arange(num_classes)
 
@@ -403,7 +406,7 @@ def training_loop(
   updated_after_pure_exploration = False
   updated_after_exploration = False
   for epoch in range(n_epochs):
-    for batch in tfds.as_numpy(train_dataset):
+    for batch in tqdm(tfds.as_numpy(train_dataset), desc=f'Epoch {epoch}'):
 
       # After pure exploration is done, add the label loss
       if step > pure_exploration_steps:
@@ -444,7 +447,7 @@ def training_loop(
       data, labels = batch
 
       # Data augmentation to shorten the distance between endpoints.
-      data, labels = data_utils.batch_with_random_endpoint(data, labels, bins, 3, max_dist=18, probability=.5, thresh=0.5)
+      # data, labels = data_utils.batch_with_random_endpoint(data, labels, bins, 3, max_dist=18, probability=.5, thresh=0.5)
 
       # TODO(gnegiar): build the graphs once before hand, in the dataloading
       # Make graphs from the batch of images
@@ -457,6 +460,15 @@ def training_loop(
 
       # Use the results inside a JAX implicit differentiation construction.
       rng_it, rng = jax.random.split(rng)
+
+      # (loss, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss, exploration_bonus)) = forward(
+      #     model_state,
+      #     graphs,
+      #     graphs.sample_start_node_id(),
+      #     labels,
+      #     rng=rng_it,
+      #     config=eval_config
+      # )
 
       (loss, (preds, logits, q, dense_submat, label_loss, curiosity_loss, entropy_loss, exploration_bonus)), model_grad = value_grad_loss_fn(
           model_state,
@@ -523,13 +535,15 @@ def training_loop(
 
           if use_wandb:
             training_data_plot = train_utils.plot_subgraph(
-                          img=data[0].squeeze(),
+                          img=graphs.image[0].squeeze() / len(bins),
                           # Select first element in batch of qs
                           q=jsparse.BCOO((q.data[0], q.indices[0]),
                                         shape=q.shape[1:]),
                           label=preds[0],
                           # Transposing usual batch convention due to flax
-                          start_node_coords=graphs.start_node_coords[:, 0])
+                          # start node coords should be in pixel space, not patch space
+                          start_node_coords=graphs.start_node_coords[:, 0] * graphs.patch_size + graphs.window_size,
+                          patch_size=patch_size)
             wandb.log({
               'Training data': training_data_plot, 
               "batch": step})
@@ -542,8 +556,9 @@ def training_loop(
                           q_rep,
                           preds_rep,
                           # transpose because of weird flax behavior
-                          test_representatives_graphs.start_node_coords.T,
-                          num_classes)
+                          test_representatives_graphs.start_node_coords.T * test_representatives_graphs.patch_size + test_representatives_graphs.window_size,
+                          num_classes,
+                          patch_size=patch_size)
 
             wandb.log({
               "batch": step,
@@ -567,13 +582,14 @@ def training_loop(
                   'Training data',
                   train_utils.plot_to_image(
                       figure=train_utils.plot_subgraph(
-                          img=data[0].squeeze(),
+                          img=data[0].squeeze() / len(bins),
                           # Select first element in batch of qs
                           q=jsparse.BCOO((q.data[0], q.indices[0]),
                                         shape=q.shape[1:]),
                           label=preds[0],
                           # Transposing usual batch convention due to flax
-                          start_node_coords=graphs.start_node_coords[:, 0])),
+                          start_node_coords=graphs.start_node_coords[:, 0] * graphs.patch_size + graphs.window_size,
+                          patch_size=patch_size)),
                   step=step)
               tf.summary.histogram('Node weights', q.data[0], step=step)
 
@@ -585,8 +601,9 @@ def training_loop(
                           q_rep,
                           preds_rep,
                           # transpose because of weird flax behavior
-                          test_representatives_graphs.start_node_coords.T,
-                          num_classes)),
+                          test_representatives_graphs.start_node_coords.T * graphs.patch_size + graphs.window_size,
+                          num_classes,
+                          patch_size=patch_size)),
                   step=step)
 
               tf.summary.image(
@@ -701,6 +718,7 @@ def main(argv):
   # Hide any GPUs from TensorFlow. Otherwise TF might reserve memory and make
   # it unavailable to JAX.
   tf.config.experimental.set_visible_devices([], 'GPU')
+
 
   tb_logdir = FLAGS.tensorboard_logdir
 
